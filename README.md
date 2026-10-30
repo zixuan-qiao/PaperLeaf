@@ -17,6 +17,10 @@
   <img src="https://img.shields.io/badge/viewer-PDF.js-red.svg" alt="Viewer" />
 </p>
 
+<p align="center">
+  <img src="docs/images/paperleaf_hero.png" alt="PaperLeaf Interface" width="920" style="border-radius: 8px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);" />
+</p>
+
 ---
 
 ## 🌟 为什么选择 PaperLeaf？(Why PaperLeaf?)
@@ -30,14 +34,24 @@
 - 🎯 **1:1 对齐 Overleaf 双向跳转（SyncTeX）**：
   - **正向跳转**：双击左侧源码（或点击中缝 `➔` 箭头 / `Ctrl + J`），右侧 PDF 平滑滚动并将目标行居中，呈现呼吸微光脉冲高亮圈。
   - **逆向跳转**：双击右侧 PDF 段落或公式（或选中文字点击 `⬅` 箭头），左侧代码精准定位至所在文件与行号，并闪烁高亮。
+- 📚 **智能文献引用与代码补全 (Smart Citation & Autocomplete)**：
+  - 📖 **`\cite{...}` 文献自动填充**：实时感知项目内所有的 `.bib` 文献库，输入 `\cite{` 瞬间弹出文献 Key 候选列表，清晰预览论文标题与第一作者，回车直接补齐；
+  - 🏷️ **`\ref{...}` / `\eqref{...}` 智能匹配**：自动解析工程内所有 `\label{fig:...}`、`\label{tab:...}` 和 `\label{eq:...}`，敲入 `\ref{` 快速模糊匹配目标图表公式，无需手动翻找；
+  - ⚡ **学术级代码片段（Snippets）补全**：内置 `equation`、`figure`、`table`、`itemize`、`enumerate`、`\section` 等高频环境，输入前缀一键补全标准骨架并自动定位光标；
+  - 🔒 **成对符号智能自闭合**：输入 `{`、`[`、`(`、`$` 自动成对补齐，配合 Backspace 智能联退，大幅提升学术输入效率。
 - 📐 **数学公式光标实时预览（KaTeX）**：当光标移至 `$ ... $` 或 `equation` 环境内，上方自动浮现印刷级矢量公式卡片与智能输入语法提示。
-- 🏛️ **预置 6 大主流学术模板 (Templates Gallery)**：
+- 🏛️ **预置 6 大主流学术模板库 (Templates Gallery)**：
   - ⚡ **IEEE 会议论文 (IEEEtran)**：计算机/电气顶会标配双栏规范，内置公式、图表、关键词与作者栏；
   - 🏛️ **ACM 学术会议 (acmart)**：ACM SIGCONF 官方双栏标准会议规范（适合 SIGMOD, KDD, CHI 等）；
   - 🇨🇳 **中文学术论文 (CTeX)**：基于 `ctexart` 与 Fandol 开源字体的标准中文排版；
   - 🇬🇧 **英文常规论文 (Article)**：标准国际期刊常规单栏论文；
   - 📊 **学术汇报幻灯片 (Beamer 16:9)**：现代宽屏学术答辩与组会演讲 PPT；
   - 🎓 **毕业设计学位论文 (Thesis)**：标准本硕博毕业设计大纲（封面、中英文摘要、目录、各章节与致谢）。
+
+<p align="center">
+  <img src="docs/images/paperleaf_templates.png" alt="Academic Templates Gallery" width="760" style="border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,0.1);" />
+</p>
+
 - 👁️ **PDF 护眼多色滤镜系统 (Eye-Care Multi-Tone Filter)**：
   - ☀️ **默认原色 (Normal)**：真实打印效果；
   - 🌙 **极夜深色 (Dark Invert)**：白底黑字秒变深灰底浅色字，深夜赶 DDL 护眼神器；
@@ -65,7 +79,7 @@
 ### 一键安装与使用 (Zero-Config Setup)
 1. **克隆或下载本仓库**到本地任意目录（例如 `D:\PaperLeaf` 或 `E:\PaperLeaf`）：
    ```bash
-   git clone https://github.com/zixuanqiao/PaperLeaf.git
+   git clone https://github.com/zixuan-qiao/PaperLeaf.git
    ```
 2. **首次一键初始化**：
    - 双击运行根目录下的 **`install.bat`**（或 `setup.bat`）；

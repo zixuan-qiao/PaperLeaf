@@ -699,7 +699,13 @@ async function loadProjects() {
     allProjectsCache = data.projects || [];
     renderProjects(allProjectsCache);
     
-    if (allProjectsCache.length > 0 && !currentProjectId) {
+    const urlParams = new URLSearchParams(window.location.search);
+    const targetProjId = urlParams.get('project');
+    const targetProj = targetProjId ? allProjectsCache.find(p => p.id === targetProjId) : null;
+
+    if (targetProj && !currentProjectId) {
+      await selectProject(targetProj.id, targetProj);
+    } else if (allProjectsCache.length > 0 && !currentProjectId) {
       await selectProject(allProjectsCache[0].id, allProjectsCache[0]);
     }
   } catch (err) {
@@ -2527,6 +2533,10 @@ function initProjectModal() {
   const closeModal = () => modal.classList.add('hidden');
   btnClose.addEventListener('click', closeModal);
   btnCancel.addEventListener('click', closeModal);
+
+  if (new URLSearchParams(window.location.search).get('modal') === 'templates') {
+    modal.classList.remove('hidden');
+  }
 
   btnConfirm.addEventListener('click', async () => {
     const name = inputName.value.trim() || '未命名论文项目';
