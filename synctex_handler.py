@@ -97,9 +97,20 @@ def get_synctex_data(synctex_path):
 
     return data
 
+def resolve_synctex_path(project_dir):
+    """Dynamically find the generated synctex.gz in the project's build directory."""
+    build_dir = os.path.join(project_dir, 'build')
+    if not os.path.exists(build_dir):
+        return os.path.join(build_dir, 'main.synctex.gz')
+    cands = [os.path.join(build_dir, f) for f in os.listdir(build_dir) if f.endswith('.synctex.gz')]
+    if cands:
+        cands.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+        return cands[0]
+    return os.path.join(build_dir, 'main.synctex.gz')
+
 def find_pos_for_line(project_dir, filename, target_line):
     """Forward SyncTeX: find page and bounding box (x, y, w, h in pt) for a given code line."""
-    synctex_path = os.path.join(project_dir, 'build', 'main.synctex.gz')
+    synctex_path = resolve_synctex_path(project_dir)
     data = get_synctex_data(synctex_path)
     if not data:
         return {'page': 1, 'x': 50, 'y': 100, 'w': 200, 'h': 16}
@@ -127,7 +138,7 @@ def find_page_for_line(project_dir, filename, target_line):
 
 def find_line_for_pos(project_dir, target_page, click_x, click_y):
     """Backward SyncTeX: find source file and line for a click position on a PDF page."""
-    synctex_path = os.path.join(project_dir, 'build', 'main.synctex.gz')
+    synctex_path = resolve_synctex_path(project_dir)
     data = get_synctex_data(synctex_path)
     if not data:
         return {'file': 'main.tex', 'line': 1}

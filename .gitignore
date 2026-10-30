@@ -4,10 +4,9 @@
 # ==========================================
 
 # 1. User Projects & Private Data (STRICTLY IGNORED)
-data/projects/
-data/cache/
-data/edge_profile/
-data/server.log
+data/*
+!data/.gitkeep
+!data/README.md
 
 # 2. Large Binary Executables (Downloaded automatically on setup)
 bin/tectonic.exe
@@ -24,11 +23,16 @@ venv/
 env/
 ENV/
 
-# 4. OS & IDE Metadata
+# 4. Scratch & Temporary Files
+scratch/
+scratch_*
+*.tmp
+*.bak
+
+# 5. OS & IDE Metadata
 .DS_Store
 Thumbs.db
 ehthumbs.db
 Desktop.ini
-*.tmp
 .vscode/
 .idea/

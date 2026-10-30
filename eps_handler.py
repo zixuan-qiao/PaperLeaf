@@ -148,7 +148,7 @@ def preprocess_project_eps(project_dir):
     has_eps = False
     converted_files = set()
     for root, dirs, files in os.walk(project_dir):
-        if os.path.basename(root) == 'build':
+        if os.path.basename(root) in ('build', '.history') or '.history' in root:
             continue
         for file in files:
             if file.lower().endswith('.eps'):
@@ -163,7 +163,7 @@ def preprocess_project_eps(project_dir):
         return
 
     for root, dirs, files in os.walk(project_dir):
-        if os.path.basename(root) == 'build':
+        if os.path.basename(root) in ('build', '.history') or '.history' in root:
             continue
         for file in files:
             ext = os.path.splitext(file)[1].lower()

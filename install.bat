@@ -78,7 +78,7 @@ for /f "tokens=*" %%v in ('"!PY_EXE!" --version 2^>^&1') do echo   ✓ 运行版
 echo.
 
 :: 2. 安装 Python 依赖库
-echo [2/5] 正在安装与校验核心依赖库 (Flask, Pillow, pypdf, psutil)...
+echo [2/5] 正在安装与校验核心依赖库 (Flask, Pillow, psutil)...
 "!PY_EXE!" -m pip install -r "%~dp0requirements.txt"
 if !errorlevel! neq 0 (
     echo.

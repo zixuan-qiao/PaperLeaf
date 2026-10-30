@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PaperLeaf - 独立双屏 PDF 视窗</title>
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+  <link rel="stylesheet" href="/static/vendor/pdfjs/pdf_viewer.min.css">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/vendor/pdfjs/pdf.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: var(--bg-primary, #0f172a);
+      color: var(--text-primary, #f1f5f9);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .popout-header {
+      height: 42px;
+      background-color: var(--bg-header, #090d16);
+      border-bottom: 1px solid var(--border-color, #334155);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      user-select: none;
+      flex-shrink: 0;
+    }
+    .popout-title {
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .popout-status {
+      font-size: 11px;
+      color: #10b981;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .popout-viewer-container {
+      flex: 1;
+      position: relative;
+      overflow: auto;
+      background-color: #525659;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 0;
+    }
+  </style>
+</head>
+<body data-theme="dark">
+  <header class="popout-header">
+    <div class="popout-title">
+      <span>📄</span>
+      <span id="popout-project-name">PaperLeaf 独立双屏视窗</span>
+    </div>
+
+    <div class="pdf-controls">
+      <button id="btn-sync-to-code" class="tool-btn" style="background-color: #2563eb; color: #ffffff; font-weight: 500; border: none; padding: 4px 10px; margin-right: 8px; border-radius: 4px; cursor: pointer;" title="从 PDF 当前位置跳转至左侧代码源码 (也可直接双击页面)">👈 定位至代码</button>
+      <button id="btn-zoom-out" class="tool-btn-icon" title="缩小 (Ctrl + 滚轮向下)">−</button>
+      <span id="zoom-text" class="font-size-label media-zoom-label">适应</span>
+      <button id="btn-zoom-in" class="tool-btn-icon" title="放大 (Ctrl + 滚轮向上)">+</button>
+      <button id="btn-fit-width" class="tool-btn" title="适应窗口宽度">↔ 适应</button>
+      <span id="popout-page-num" class="pdf-page-indicator">第 1 页</span>
+    </div>
+
+    <div class="popout-status">
+      <span class="status-dot">🟢</span>
+      <span>双向 SyncTeX 实时互通</span>
+    </div>
+  </header>
+
+  <main id="pdf-container" class="popout-viewer-container">
+    <div id="pdf-loading" style="color:#94a3b8; font-size:14px; margin-top:40px;">⏳ 正在加载 PDF 实时渲染...</div>
+  </main>
+
+  <script>
+    if (typeof pdfjsLib !== 'undefined') {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/vendor/pdfjs/pdf.worker.min.js';
+    }
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const projectId = urlParams.get('project_id') || '';
+    const projectName = urlParams.get('project_name') || '项目预览';
+    if (projectName) {
+      document.getElementById('popout-project-name').textContent = `📄 ${projectName} (独立视窗)`;
+      document.title = `${projectName} - PaperLeaf 独立双屏 PDF 视窗`;
+    }
+
+    const container = document.getElementById('pdf-container');
+    const zoomText = document.getElementById('zoom-text');
+    const pageNumLabel = document.getElementById('popout-page-num');
+
+    let currentPdfDoc = null;
+    let pdfScale = 1.0;
+    let isFitWidth = true;
+    let isRendering = false;
+    let renderTasks = [];
+
+    // SyncTeX Broadcast Channel for 0-latency dual-window communication
+    let channel = null;
+    if (projectId && typeof BroadcastChannel !== 'undefined') {
+      channel = new BroadcastChannel('paperleaf_synctex_' + projectId);
+      channel.onmessage = (e) => {
+        const msg = e.data || {};
+        if (msg.type === 'pdf_updated') {
+          loadPdf(msg.url || `/api/projects/${projectId}/pdf?t=${Date.now()}`);
+        } else if (msg.type === 'synctex_forward') {
+          highlightPdfRegion(msg.page, msg.x, msg.y, msg.w, msg.h);
+        }
+      };
+    }
+
+    async function loadPdf(url) {
+      try {
+        const loadingTask = pdfjsLib.getDocument({
+          url: url,
+          cMapUrl: '/static/vendor/pdfjs/cmaps/',
+          cMapPacked: true,
+          standardFontDataUrl: '/static/vendor/pdfjs/standard_fonts/',
+        });
+        currentPdfDoc = await loadingTask.promise;
+        renderAllPages();
+      } catch (err) {
+        container.innerHTML = `<div style="color:#f87171; font-size:14px; margin-top:40px;">❌ PDF 加载失败: ${err.message || err}</div>`;
+      }
+    }
+
+    async function renderAllPages() {
+      if (!currentPdfDoc || !container) return;
+      if (isRendering) {
+        renderTasks.forEach(t => { try { t.cancel(); } catch(e){} });
+        renderTasks = [];
+      }
+      isRendering = true;
+      renderTasks.forEach(t => { try { t.cancel(); } catch(e){} });
+      renderTasks = [];
+
+      const scrollPos = container.scrollTop;
+      container.innerHTML = '';
+      const numPages = currentPdfDoc.numPages;
+      const dpr = window.devicePixelRatio || 1;
+
+      try {
+        for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+          const page = await currentPdfDoc.getPage(pageNum);
+          let scale = pdfScale;
+          if (isFitWidth) {
+            const unscaled = page.getViewport({ scale: 1.0 });
+            scale = Math.max(300, container.clientWidth - 48) / unscaled.width;
+          }
+          const viewport = page.getViewport({ scale: scale });
+
+          const pageWrapper = document.createElement('div');
+          pageWrapper.className = 'pdf-page-wrapper';
+          pageWrapper.id = `pdf-page-${pageNum}`;
+          pageWrapper.dataset.page = pageNum;
+          pageWrapper.dataset.scale = scale;
+          pageWrapper.style.width = Math.floor(viewport.width) + 'px';
+          pageWrapper.style.height = Math.floor(viewport.height) + 'px';
+
+          const canvas = document.createElement('canvas');
+          canvas.className = 'pdf-canvas';
+          canvas.width = Math.floor(viewport.width * dpr);
+          canvas.height = Math.floor(viewport.height * dpr);
+          canvas.style.width = Math.floor(viewport.width) + 'px';
+          canvas.style.height = Math.floor(viewport.height) + 'px';
+
+          const ctx = canvas.getContext('2d');
+          ctx.scale(dpr, dpr);
+
+          const textLayerDiv = document.createElement('div');
+          textLayerDiv.className = 'textLayer';
+          textLayerDiv.style.width = Math.floor(viewport.width) + 'px';
+          textLayerDiv.style.height = Math.floor(viewport.height) + 'px';
+
+          const overlay = document.createElement('div');
+          overlay.className = 'pdf-highlight-overlay';
+
+          pageWrapper.appendChild(canvas);
+          pageWrapper.appendChild(textLayerDiv);
+          pageWrapper.appendChild(overlay);
+          container.appendChild(pageWrapper);
+
+          // Double click -> Backward SyncTeX to Main Window
+          pageWrapper.addEventListener('dblclick', async (e) => {
+            const rect = pageWrapper.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+            const effScale = parseFloat(pageWrapper.dataset.scale) || pdfScale;
+            const ptX = clickX / effScale;
+            const ptY = clickY / effScale;
+            try {
+              const res = await fetch(`/api/projects/${projectId}/synctex/backward?page=${pageNum}&x=${ptX.toFixed(1)}&y=${ptY.toFixed(1)}`);
+              const data = await res.json();
+              if (data.success && data.line && channel) {
+                channel.postMessage({
+                  type: 'synctex_backward',
+                  file: data.file,
+                  line: data.line
+                });
+              }
+            } catch (err) {
+              console.error('Backward SyncTeX error:', err);
+            }
+          });
+
+          const renderTask = page.render({ canvasContext: ctx, viewport: viewport });
+          renderTasks.push(renderTask);
+          await renderTask.promise;
+
+          try {
+            const textContent = await page.getTextContent();
+            const textLayerRender = pdfjsLib.renderTextLayer({
+              textContentSource: textContent,
+              container: textLayerDiv,
+              viewport: viewport,
+              textDivs: []
+            });
+            await textLayerRender.promise;
+
+            // Mozilla PDF.js endOfContent shield against whitespace text selection jump
+            const endOfContent = document.createElement('div');
+            endOfContent.className = 'endOfContent';
+            textLayerDiv.appendChild(endOfContent);
+
+            textLayerDiv.addEventListener('mousedown', () => {
+              endOfContent.classList.add('active');
+            });
+          } catch(e){}
+        }
+      } finally {
+        isRendering = false;
+        container.scrollTop = scrollPos;
+      }
+    }
+
+    // Global mouseup to deactivate any active textLayer endOfContent shields
+    window.addEventListener('mouseup', () => {
+      document.querySelectorAll('.textLayer .endOfContent.active').forEach(el => el.classList.remove('active'));
+    });
+
+    async function jumpFromPdfToCode() {
+      if (!projectId || !container) return;
+
+      // 1. Check if user selected text anywhere in PDF
+      const selection = window.getSelection();
+      if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
+        const range = selection.getRangeAt(0);
+        const selRect = range.getBoundingClientRect();
+        if (selRect.width > 0 && selRect.height > 0) {
+          let pageWrapper = null;
+          if (range.commonAncestorContainer) {
+            pageWrapper = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
+              ? range.commonAncestorContainer.closest('.pdf-page-wrapper')
+              : (range.commonAncestorContainer.parentElement ? range.commonAncestorContainer.parentElement.closest('.pdf-page-wrapper') : null);
+          }
+          if (!pageWrapper) {
+            const pages = container.querySelectorAll('.pdf-page-wrapper');
+            for (const p of pages) {
+              const pRect = p.getBoundingClientRect();
+              if (selRect.top >= pRect.top - 10 && selRect.bottom <= pRect.bottom + 10) {
+                pageWrapper = p;
+                break;
+              }
+            }
+          }
+          if (pageWrapper) {
+            const pRect = pageWrapper.getBoundingClientRect();
+            const pageNum = parseInt(pageWrapper.dataset.page || '1', 10);
+            const effScale = parseFloat(pageWrapper.dataset.scale) || pdfScale;
+            const ptX = (selRect.left - pRect.left + selRect.width / 2) / effScale;
+            const ptY = (selRect.top - pRect.top + selRect.height / 2) / effScale;
+            await sendBackwardSync(pageNum, ptX, ptY);
+            return;
+          }
+        }
+      }
+
+      // 2. Viewport center if no text selected
+      const containerRect = container.getBoundingClientRect();
+      const centerY = containerRect.top + containerRect.height / 3;
+      const pages = container.querySelectorAll('.pdf-page-wrapper');
+      for (const p of pages) {
+        const pRect = p.getBoundingClientRect();
+        if (pRect.top <= centerY && pRect.bottom >= centerY) {
+          const pageNum = parseInt(p.dataset.page || '1', 10);
+          const effScale = parseFloat(p.dataset.scale) || pdfScale;
+          const ptX = 100;
+          const ptY = Math.max(0, (centerY - pRect.top) / effScale);
+          await sendBackwardSync(pageNum, ptX, ptY);
+          return;
+        }
+      }
+    }
+
+    async function sendBackwardSync(pageNum, ptX, ptY) {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/synctex/backward?page=${pageNum}&x=${ptX.toFixed(1)}&y=${ptY.toFixed(1)}`);
+        const data = await res.json();
+        if (data.success && data.line && channel) {
+          channel.postMessage({
+            type: 'synctex_backward',
+            file: data.file,
+            line: data.line
+          });
+        }
+      } catch (err) {
+        console.error('Backward SyncTeX error:', err);
+      }
+    }
+
+    function highlightPdfRegion(pageNo, x, y, w, h) {
+      const pageDiv = document.getElementById('pdf-page-' + pageNo);
+      if (!pageDiv || !container) return;
+      const effScale = parseFloat(pageDiv.dataset.scale) || pdfScale;
+      const containerRect = container.getBoundingClientRect();
+      const pageRect = pageDiv.getBoundingClientRect();
+      const pageTopInScroll = (pageRect.top - containerRect.top) + container.scrollTop;
+      const targetYInPage = Math.max(0, y * effScale);
+      const targetAbsoluteY = pageTopInScroll + targetYInPage;
+
+      container.scrollTo({ top: Math.max(0, targetAbsoluteY - (containerRect.height / 3)), behavior: 'smooth' });
+
+      document.querySelectorAll('.synctex-highlight-box').forEach(el => el.remove());
+      const overlay = pageDiv.querySelector('.pdf-highlight-overlay');
+      if (!overlay) return;
+
+      const box = document.createElement('div');
+      box.className = 'synctex-highlight-box';
+      const lineH = (h && h > 0) ? h : 14;
+      const lineW = (w && w > 0) ? w : 120;
+      box.style.left = Math.max(0, (x - 6) * effScale) + 'px';
+      box.style.top = Math.max(0, (y - lineH * 0.85) * effScale) + 'px';
+      box.style.width = Math.max(80, (lineW + 12) * effScale) + 'px';
+      box.style.height = Math.max(16, (lineH + 4) * effScale) + 'px';
+      overlay.appendChild(box);
+      setTimeout(() => box.remove(), 2400);
+    }
+
+    // Controls
+    const btnSyncToCode = document.getElementById('btn-sync-to-code');
+    if (btnSyncToCode) {
+      btnSyncToCode.addEventListener('click', jumpFromPdfToCode);
+    }
+
+    window.addEventListener('beforeunload', () => {
+      if (channel) {
+        try {
+          channel.postMessage({ type: 'popout_closing' });
+        } catch(e){}
+      }
+    });
+
+    document.getElementById('btn-zoom-in').addEventListener('click', () => {
+      isFitWidth = false;
+      pdfScale = Math.min(2.5, pdfScale + 0.15);
+      zoomText.textContent = Math.round(pdfScale * 100) + '%';
+      renderAllPages();
+    });
+    document.getElementById('btn-zoom-out').addEventListener('click', () => {
+      isFitWidth = false;
+      pdfScale = Math.max(0.5, pdfScale - 0.15);
+      zoomText.textContent = Math.round(pdfScale * 100) + '%';
+      renderAllPages();
+    });
+    document.getElementById('btn-fit-width').addEventListener('click', () => {
+      isFitWidth = true;
+      zoomText.textContent = '适应';
+      renderAllPages();
+    });
+    container.addEventListener('wheel', (e) => {
+      if (e.ctrlKey) {
+        e.preventDefault();
+        isFitWidth = false;
+        pdfScale = Math.min(2.5, Math.max(0.5, pdfScale + (e.deltaY < 0 ? 0.1 : -0.1)));
+        zoomText.textContent = Math.round(pdfScale * 100) + '%';
+        renderAllPages();
+      }
+    }, { passive: false });
+
+    if (projectId) {
+      loadPdf(`/api/projects/${projectId}/pdf?t=${Date.now()}`);
+    }
+  </script>
+</body>
+</html>

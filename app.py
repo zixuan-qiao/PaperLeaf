@@ -86,14 +86,18 @@ def parse_tectonic_errors(stderr_text):
     for i, line in enumerate(lines):
         if "fontconfig error" in line.lower():
             continue
-        file_line_match = re.search(r'[\w\-.]+\.tex:(\d+):', line)
+        file_line_match = re.search(r'([\w\-./\\]+\.tex):(\d+):', line)
+        if not file_line_match:
+            file_line_match = re.search(r'(?:error:\s*)?([\w\-./\\]+):(\d+):', line)
         colon_line_match = re.search(r':(\d+):', line)
         line_match = re.search(r'line\s+(\d+)', line, re.IGNORECASE)
         l_num_match = re.search(r'^l\.(\d+)', line)
         if "error:" in line.lower() or line.startswith("!"):
             line_no = None
+            err_file = None
             if file_line_match:
-                line_no = int(file_line_match.group(1))
+                err_file = os.path.basename(file_line_match.group(1))
+                line_no = int(file_line_match.group(2))
             elif colon_line_match:
                 line_no = int(colon_line_match.group(1))
             elif line_match:
@@ -102,14 +106,19 @@ def parse_tectonic_errors(stderr_text):
                 line_no = int(l_num_match.group(1))
             elif i + 1 < len(lines):
                 next_line = lines[i+1]
-                next_match = (re.search(r'[\w\-.]+\.tex:(\d+):', next_line) or 
-                              re.search(r':(\d+):', next_line) or
-                              re.search(r'line\s+(\d+)', next_line, re.IGNORECASE) or 
-                              re.search(r'^l\.(\d+)', next_line))
-                if next_match:
-                    line_no = int(next_match.group(1))
+                next_file_match = re.search(r'([\w\-./\\]+\.tex):(\d+):', next_line)
+                if next_file_match:
+                    err_file = os.path.basename(next_file_match.group(1))
+                    line_no = int(next_file_match.group(2))
+                else:
+                    next_match = (re.search(r':(\d+):', next_line) or
+                                  re.search(r'line\s+(\d+)', next_line, re.IGNORECASE) or 
+                                  re.search(r'^l\.(\d+)', next_line))
+                    if next_match:
+                        line_no = int(next_match.group(1))
             errors.append({
                 "line": line_no or 1,
+                "file": err_file or "",
                 "message": line.strip()
             })
     return errors
@@ -147,40 +156,7 @@ def analyze_compile_diagnostics(log_text, tex_path):
 
     return diagnostics
 
-def ensure_ctex_windows_font_shim(project_dir):
-    """
-    Ensure Overleaf CTeX documents (which default to fontset=fandol) seamlessly 
-    render using bundled Fandol fonts (1:1 identical to Overleaf) or gracefully
-    fallback to Windows system fonts (SimSun, SimHei) if Fandol is missing.
-    """
-    if not os.path.exists(project_dir):
-        return
-
-    fandol_fonts = [
-        "FandolSong-Regular.otf", "FandolSong-Bold.otf",
-        "FandolHei-Regular.otf", "FandolHei-Bold.otf",
-        "FandolKai-Regular.otf", "FandolFang-Regular.otf"
-    ]
-    has_fandol = os.path.exists(FANDOL_DIR) and any(
-        os.path.exists(os.path.join(FANDOL_DIR, f)) for f in fandol_fonts
-    )
-
-    shim_path = os.path.join(project_dir, "ctex-fontset-fandol.def")
-
-    if has_fandol:
-        for f in fandol_fonts:
-            src = os.path.join(FANDOL_DIR, f)
-            dst = os.path.join(project_dir, f)
-            if os.path.exists(src) and not os.path.exists(dst):
-                try:
-                    os.link(src, dst)
-                except Exception:
-                    try:
-                        shutil.copy2(src, dst)
-                    except Exception as ce:
-                        print(f"[WARN] Failed to link/copy font {f}:", ce)
-
-        fandol_def_content = r"""%%
+FANDOL_DEF_CONTENT = r"""%%
 \ProvidesExplFile{ctex-fontset-fandol.def}
   {\ExplFileDate}{2.5.8}{Fandol fonts for PaperLeaf}
 \ctex_fontset_case:nnnn
@@ -232,41 +208,92 @@ def ensure_ctex_windows_font_shim(project_dir):
 \NewDocumentCommand \fangsong { } { \CJKfamily { zhfs    } }
 \NewDocumentCommand \kaishu   { } { \CJKfamily { zhkai   } }
 """
+
+def ensure_global_ctex_font_shim():
+    """Ensure ctex-fontset-fandol.def is present in global FANDOL_DIR for Tectonic search-path."""
+    if not os.path.exists(FANDOL_DIR):
+        return
+    fandol_def_path = os.path.join(FANDOL_DIR, "ctex-fontset-fandol.def")
+    if not os.path.exists(fandol_def_path):
         try:
-            with open(shim_path, "w", encoding="utf-8") as f:
-                f.write(fandol_def_content)
+            with open(fandol_def_path, "w", encoding="utf-8") as f:
+                f.write(FANDOL_DEF_CONTENT)
         except Exception as e:
-            print("[WARN] Failed to write ctex font shim:", e)
-    else:
+            print("[WARN] Failed to write global ctex font shim:", e)
+
+_cleaned_projects = set()
+
+def cleanup_legacy_font_pollution(project_dir):
+    """Purge legacy physical Fandol*.otf and ctex-fontset-fandol.def from project directory."""
+    if project_dir in _cleaned_projects:
+        return
+    if not os.path.exists(project_dir):
+        return
+    try:
+        for f in os.listdir(project_dir):
+            if f == "ctex-fontset-fandol.def" or (f.startswith("Fandol") and f.endswith(".otf")):
+                try:
+                    os.remove(os.path.join(project_dir, f))
+                except Exception:
+                    pass
+        _cleaned_projects.add(project_dir)
+    except Exception:
+        pass
+
+def get_project_root_document(project_id):
+    """Resolve the designated entry/root document (.tex) for a project."""
+    p_dir = os.path.join(PROJECTS_DIR, project_id)
+    meta_file = os.path.join(p_dir, "meta.json")
+    root_doc = "main.tex"
+    if os.path.exists(meta_file):
         try:
-            with open(shim_path, "w", encoding="utf-8") as f:
-                f.write("% Auto-generated by PaperLeaf for Overleaf Chinese font compatibility\n\\input{ctex-fontset-windows.def}\n")
-        except Exception as e:
-            print("[WARN] Failed to write fallback ctex font shim:", e)
+            with open(meta_file, "r", encoding="utf-8") as mf:
+                meta = json.load(mf)
+                root_doc = meta.get("root_document", "main.tex")
+        except Exception:
+            pass
+
+    if os.path.exists(os.path.join(p_dir, root_doc)):
+        return root_doc
+
+    if os.path.exists(os.path.join(p_dir, "main.tex")):
+        return "main.tex"
+
+    for root, dirs, files in os.walk(p_dir):
+        dirs[:] = [d for d in dirs if d not in ("build", ".history", "__pycache__")]
+        for f in files:
+            if f.lower().endswith(".tex"):
+                return os.path.relpath(os.path.join(root, f), p_dir).replace("\\", "/")
+    return "main.tex"
 
 def ensure_initial_projects():
+    ensure_global_ctex_font_shim()
     existing = [d for d in os.listdir(PROJECTS_DIR) if os.path.isdir(os.path.join(PROJECTS_DIR, d))]
     for d in existing:
-        ensure_ctex_windows_font_shim(os.path.join(PROJECTS_DIR, d))
+        cleanup_legacy_font_pollution(os.path.join(PROJECTS_DIR, d))
     if not existing:
         create_project_internal("demo_chinese", "中文学术论文示例", "chinese")
         create_project_internal("demo_english", "English Research Demo", "english")
 
-def create_project_internal(project_id, name, language):
+def create_project_internal(project_id, name, template_key="chinese"):
     p_dir = os.path.join(PROJECTS_DIR, project_id)
     os.makedirs(p_dir, exist_ok=True)
-    ensure_ctex_windows_font_shim(p_dir)
+    tpl = TEMPLATES.get(template_key, TEMPLATES.get("chinese", {}))
+    lang = tpl.get("language", "english" if template_key == "english" else "chinese")
     meta = {
         "id": project_id,
         "name": name,
-        "language": language,
+        "language": lang,
+        "template": template_key,
+        "root_document": "main.tex",
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
+        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "has_pdf": False
     }
     with open(os.path.join(p_dir, "meta.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
     
-    tex_content = TEMPLATES.get(language, TEMPLATES["english"])["content"]
+    tex_content = tpl.get("content", TEMPLATES["chinese"]["content"])
     with open(os.path.join(p_dir, "main.tex"), "w", encoding="utf-8") as f:
         f.write(tex_content)
     return meta
@@ -286,12 +313,13 @@ def cleanup_zombie_edge():
     """Kill any stale Edge processes that locked our isolated edge_profile"""
     try:
         import psutil
-        for p in psutil.process_iter(['name', 'cmdline']):
+        for p in psutil.process_iter(['name']):
             try:
                 name = (p.info.get('name') or '').lower()
-                cmdline = ' '.join(p.info.get('cmdline') or [])
-                if 'msedge' in name and 'edge_profile' in cmdline:
-                    p.kill()
+                if 'msedge' in name:
+                    cmdline = ' '.join(p.cmdline())
+                    if 'edge_profile' in cmdline:
+                        p.kill()
             except Exception:
                 pass
     except Exception:
@@ -314,14 +342,14 @@ def list_project_files(project_id):
     if not os.path.exists(p_dir):
         return jsonify({"error": "Project not found"}), 404
         
+    cleanup_legacy_font_pollution(p_dir)
+    root_doc = get_project_root_document(project_id)
+
     files_list = []
     for root, dirs, files in os.walk(p_dir):
-        rel_dir = os.path.relpath(root, p_dir)
-        if rel_dir == "build" or rel_dir.startswith("build" + os.sep):
-            continue
+        # Prune dirs in-place to avoid descending into build, .history, __pycache__
+        dirs[:] = [d for d in dirs if d not in ("build", ".history", "__pycache__")]
         for d in dirs:
-            if d == "build":
-                continue
             r_path = os.path.relpath(os.path.join(root, d), p_dir).replace("\\", "/")
             files_list.append({
                 "name": d,
@@ -334,12 +362,14 @@ def list_project_files(project_id):
                 continue
             r_path = os.path.relpath(os.path.join(root, f), p_dir).replace("\\", "/")
             ext = os.path.splitext(f)[1].lower().lstrip(".")
+            is_root = (r_path.lower() == root_doc.lower())
             files_list.append({
                 "name": f,
                 "path": r_path,
                 "is_dir": False,
                 "ext": ext,
-                "size": os.path.getsize(os.path.join(root, f))
+                "size": os.path.getsize(os.path.join(root, f)),
+                "is_root": is_root
             })
             
     def sort_key(item):
@@ -352,7 +382,37 @@ def list_project_files(project_id):
         return key
 
     files_list.sort(key=sort_key)
-    return jsonify({"files": files_list})
+    return jsonify({"files": files_list, "root_document": root_doc})
+
+@app.route("/api/projects/<project_id>/set_root_document", methods=["POST"])
+def set_root_document(project_id):
+    p_dir = os.path.join(PROJECTS_DIR, project_id)
+    if not os.path.exists(p_dir):
+        return jsonify({"success": False, "error": "项目不存在"}), 404
+        
+    data = request.json or {}
+    root_doc = data.get("root_document", "").strip().lstrip("/\\")
+    if not root_doc or not root_doc.lower().endswith(".tex"):
+        return jsonify({"success": False, "error": "主文档必须为 .tex 文件"}), 400
+        
+    target_path = os.path.abspath(os.path.join(p_dir, root_doc))
+    if not is_safe_subpath(p_dir, target_path) or not os.path.exists(target_path):
+        return jsonify({"success": False, "error": f"找不到指定文件: {root_doc}"}), 404
+        
+    meta_file = os.path.join(p_dir, "meta.json")
+    meta = {}
+    if os.path.exists(meta_file):
+        try:
+            with open(meta_file, "r", encoding="utf-8") as mf:
+                meta = json.load(mf)
+        except Exception:
+            pass
+    meta["root_document"] = root_doc
+    meta["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    with open(meta_file, "w", encoding="utf-8") as mf:
+        json.dump(meta, mf, ensure_ascii=False, indent=2)
+        
+    return jsonify({"success": True, "root_document": root_doc})
 
 @app.route("/api/projects/<project_id>/upload_file", methods=["POST"])
 def upload_project_file(project_id):
@@ -411,8 +471,12 @@ def delete_project_file(project_id):
     data = request.json or {}
     rel_path = data.get("path", "").strip().lstrip("/\\")
     
-    if not rel_path or rel_path == "main.tex":
-        return jsonify({"error": "不能删除 main.tex 核心文件"}), 400
+    root_doc = get_project_root_document(project_id)
+    if not rel_path or rel_path.lower() == root_doc.lower():
+        return jsonify({"error": f"不能删除当前主文档 ({root_doc})。如需删除，请先将其他 .tex 文件设为主文档"}), 400
+        
+    if rel_path in (".history", "meta.json", "build") or rel_path.startswith(".history/") or rel_path.startswith(".history\\") or rel_path.startswith("build/") or rel_path.startswith("build\\"):
+        return jsonify({"error": "禁止删除系统关键元数据或内部系统目录"}), 400
         
     target_path = os.path.abspath(os.path.join(p_dir, rel_path))
     if not is_safe_subpath(p_dir, target_path):
@@ -461,11 +525,56 @@ def list_projects():
                     "created_at": "",
                     "updated_at": ""
                 }
-            pdf_path = os.path.join(p_dir, "build", "main.pdf")
-            meta["has_pdf"] = os.path.exists(pdf_path)
+            root_doc = get_project_root_document(d)
+            meta["root_document"] = root_doc
+            doc_stem = os.path.splitext(os.path.basename(root_doc))[0]
+            pdf_path = os.path.join(p_dir, "build", f"{doc_stem}.pdf")
+            has_pdf = os.path.exists(pdf_path)
+            if not has_pdf and os.path.exists(os.path.join(p_dir, "build")):
+                has_pdf = any(f.lower().endswith(".pdf") for f in os.listdir(os.path.join(p_dir, "build")))
+            meta["has_pdf"] = has_pdf
             projects.append(meta)
     projects.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
     return jsonify({"projects": projects})
+
+def detect_latex_language(tex_path):
+    """
+    Intelligently detect whether a LaTeX document is Chinese (CTeX) or English (Standard).
+    Strips % comments first to prevent misclassifying English papers that contain Chinese author notes.
+    """
+    if not os.path.exists(tex_path):
+        return "english"
+    try:
+        with open(tex_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read(15000)
+    except Exception:
+        return "english"
+
+    lower_content = content.lower()
+    ctex_classes = ["ctexart", "ctexrep", "ctexbook", "ctexbeamer"]
+    for cls in ctex_classes:
+        if "\\documentclass" in lower_content and cls in lower_content:
+            return "chinese"
+
+    if "\\usepackage{ctex}" in lower_content or "\\usepackage[utf8]{ctex}" in lower_content or "\\usepackage{xecjk}" in lower_content:
+        return "chinese"
+
+    # Strip comments to inspect actual printable body
+    non_comment_lines = []
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith("%"):
+            continue
+        code_part = re.split(r'(?<!\\)%', line)[0]
+        if code_part.strip():
+            non_comment_lines.append(code_part)
+            
+    body_text = "\n".join(non_comment_lines)
+    chinese_chars = sum(1 for char in body_text if '\u4e00' <= char <= '\u9fff')
+    if chinese_chars >= 30:
+        return "chinese"
+        
+    return "english"
 
 @app.route("/api/projects/upload_zip", methods=["POST"])
 def upload_zip():
@@ -533,9 +642,12 @@ def upload_zip():
             except Exception:
                 pass
                 
-        # Smart main.tex detection
+        # Smart root document detection
         main_tex = os.path.join(p_dir, "main.tex")
-        if not os.path.exists(main_tex):
+        root_doc_rel = "main.tex"
+        if os.path.exists(main_tex):
+            root_doc_rel = "main.tex"
+        else:
             tex_candidates = []
             for root, dirs, files in os.walk(p_dir):
                 for file in files:
@@ -553,25 +665,21 @@ def upload_zip():
                                 break
                     except Exception:
                         pass
-                shutil.copyfile(best_file, main_tex)
+                root_doc_rel = os.path.relpath(best_file, p_dir).replace("\\", "/")
             else:
                 with open(main_tex, "w", encoding="utf-8") as f_out:
                     f_out.write(TEMPLATES["chinese"]["content"])
+                root_doc_rel = "main.tex"
         
-        # Detect language
-        is_chinese = False
-        try:
-            with open(main_tex, "r", encoding="utf-8", errors="ignore") as f_tex:
-                first_part = f_tex.read(4000)
-                if "ctex" in first_part.lower() or any('\u4e00' <= char <= '\u9fff' for char in first_part):
-                    is_chinese = True
-        except Exception:
-            pass
+        # Smart detect language from root document
+        target_root_full = os.path.join(p_dir, root_doc_rel)
+        detected_lang = detect_latex_language(target_root_full)
             
         meta = {
             "id": project_id,
             "name": clean_name,
-            "language": "chinese" if is_chinese else "english",
+            "language": detected_lang,
+            "root_document": root_doc_rel,
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "has_pdf": False
@@ -579,7 +687,8 @@ def upload_zip():
         with open(os.path.join(p_dir, "meta.json"), "w", encoding="utf-8") as mf:
             json.dump(meta, mf, ensure_ascii=False, indent=2)
             
-        ensure_ctex_windows_font_shim(p_dir)
+        cleanup_legacy_font_pollution(p_dir)
+        ensure_global_ctex_font_shim()
         try:
             preprocess_project_eps(p_dir)
         except Exception as epse:
@@ -620,10 +729,14 @@ def export_zip(project_id):
             rel_dir = os.path.relpath(root, p_dir)
             if rel_dir == "build" or rel_dir.startswith("build" + os.sep):
                 continue
+            if rel_dir == ".history" or rel_dir.startswith(".history" + os.sep):
+                continue
             for file in files:
                 if file.endswith(".zip") or file.startswith("_temp") or file == "ctex-fontset-fandol.def" or (file.startswith("Fandol") and file.endswith(".otf")):
                     continue
                 if is_clean:
+                    if file == "meta.json":
+                        continue
                     ext = os.path.splitext(file)[1].lower()
                     if ext in JUNK_EXTS:
                         continue
@@ -632,16 +745,32 @@ def export_zip(project_id):
                 zip_out.write(full_path, arcname)
                 
     memory_zip.seek(0)
-    dl_name = f"{proj_name}{suffix}.zip"
+    safe_name = re.sub(r'[\\/*?:"<>|]', '_', proj_name).strip() or "project"
+    dl_name = f"{safe_name}{suffix}.zip"
     return send_file(memory_zip, mimetype="application/zip", as_attachment=True, download_name=dl_name)
+
+@app.route("/api/templates", methods=["GET"])
+def get_templates():
+    tpl_list = []
+    for tid, tpl in TEMPLATES.items():
+        tpl_list.append({
+            "id": tid,
+            "name": tpl.get("name", tid),
+            "category": tpl.get("category", "通用"),
+            "icon": tpl.get("icon", "📄"),
+            "badge": tpl.get("badge", ""),
+            "language": tpl.get("language", "english"),
+            "description": tpl.get("description", "")
+        })
+    return jsonify({"success": True, "templates": tpl_list})
 
 @app.route("/api/projects", methods=["POST"])
 def create_project():
     data = request.json or {}
     name = data.get("name", "").strip() or "未命名项目"
-    language = data.get("language", "chinese")
+    template_key = data.get("template") or data.get("language") or "chinese"
     project_id = f"project_{int(time.time())}"
-    meta = create_project_internal(project_id, name, language)
+    meta = create_project_internal(project_id, name, template_key)
     return jsonify({"success": True, "project": meta})
 
 @app.route("/api/projects/<project_id>", methods=["DELETE"])
@@ -720,6 +849,9 @@ def save_content(project_id):
     if not is_safe_subpath(p_dir, file_path):
         return jsonify({"success": False, "error": "非法文件路径"}), 400
 
+    if rel_path in (".history", "meta.json", "build") or rel_path.startswith(".history/") or rel_path.startswith(".history\\") or rel_path.startswith("build/") or rel_path.startswith("build\\"):
+        return jsonify({"success": False, "error": "禁止修改系统元数据或内部目录"}), 400
+
     # Binary / Non-editable file safety protection
     ext = os.path.splitext(rel_path)[1].lower()
     NON_EDITABLE_EXTS = {
@@ -752,29 +884,44 @@ def save_content(project_id):
 @app.route("/api/projects/<project_id>/compile", methods=["POST"])
 def compile_project(project_id):
     p_dir = os.path.join(PROJECTS_DIR, project_id)
-    tex_path = os.path.join(p_dir, "main.tex")
+    if not os.path.exists(p_dir):
+        return jsonify({"success": False, "error": "项目不存在"}), 404
+
+    root_doc = get_project_root_document(project_id)
+    tex_path = os.path.join(p_dir, root_doc)
     build_dir = os.path.join(p_dir, "build")
     os.makedirs(build_dir, exist_ok=True)
     
     data = request.get_json(silent=True) or {}
-    if "content" in data and data["content"]:
-        with open(tex_path, "w", encoding="utf-8") as f:
-            f.write(data["content"])
+    if "content" in data and data["content"] is not None:
+        save_target = tex_path
+        if "path" in data and data["path"]:
+            candidate_target = os.path.abspath(os.path.join(p_dir, data["path"].strip().lstrip("/\\")))
+            if is_safe_subpath(p_dir, candidate_target):
+                save_target = candidate_target
+        content_to_save = data["content"]
+        # Defense: Never overwrite non-empty disk file with empty or whitespace-only content
+        if os.path.exists(save_target) and os.path.getsize(save_target) > 0 and len(content_to_save.strip()) == 0:
+            pass
+        else:
+            with open(save_target, "w", encoding="utf-8") as f:
+                f.write(content_to_save)
 
     if not os.path.exists(tex_path):
-        return jsonify({"success": False, "error": "文件不存在"}), 400
+        return jsonify({"success": False, "error": f"主编译文档不存在: {root_doc}"}), 400
 
     env = os.environ.copy()
     env["TECTONIC_CACHE_DIR"] = CACHE_DIR
 
-    ensure_ctex_windows_font_shim(p_dir)
+    cleanup_legacy_font_pollution(p_dir)
+    ensure_global_ctex_font_shim()
     try:
         preprocess_project_eps(p_dir)
     except Exception as epse:
         print("[WARN] EPS preprocessing error on compile:", epse)
 
     start_time = time.time()
-    cmd = [TECTONIC_EXE, "--synctex", "--print", "-o", build_dir, tex_path]
+    cmd = [TECTONIC_EXE, "-Z", f"search-path={FANDOL_DIR}", "--synctex", "--print", "-o", build_dir, tex_path]
     creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     
     try:
@@ -790,7 +937,13 @@ def compile_project(project_id):
             creationflags=creation_flags
         )
         elapsed = round(time.time() - start_time, 2)
-        pdf_path = os.path.join(build_dir, "main.pdf")
+        doc_stem = os.path.splitext(os.path.basename(root_doc))[0]
+        pdf_path = os.path.join(build_dir, f"{doc_stem}.pdf")
+        if not os.path.exists(pdf_path):
+            candidates = [os.path.join(build_dir, f) for f in os.listdir(build_dir) if f.lower().endswith(".pdf")]
+            if candidates:
+                candidates.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                pdf_path = candidates[0]
         
         if res.returncode == 0 and os.path.exists(pdf_path):
             meta_file = os.path.join(p_dir, "meta.json")
@@ -799,11 +952,17 @@ def compile_project(project_id):
                     with open(meta_file, "r", encoding="utf-8") as mf:
                         meta = json.load(mf)
                     meta["has_pdf"] = True
+                    meta["root_document"] = root_doc
                     meta["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
                     with open(meta_file, "w", encoding="utf-8") as mf:
                         json.dump(meta, mf, ensure_ascii=False, indent=2)
                 except Exception:
                     pass
+
+            try:
+                create_project_snapshot(project_id, comment=f"编译成功快照 ({elapsed}s)", starred=False)
+            except Exception as se:
+                print("[WARN] Error creating compile snapshot:", se)
 
             full_log = (res.stdout or "") + "\n" + (res.stderr or "")
             diagnostics = analyze_compile_diagnostics(full_log, tex_path)
@@ -844,7 +1003,11 @@ def compile_project(project_id):
 @app.route("/api/projects/<project_id>/synctex/forward", methods=["GET"])
 def synctex_forward(project_id):
     p_dir = os.path.join(PROJECTS_DIR, project_id)
-    file_name = request.args.get("file", "main.tex")
+    file_name = request.args.get("file")
+    if not file_name:
+        file_name = get_project_root_document(project_id)
+    else:
+        file_name = file_name.strip().lstrip("/\\")
     try:
         line_no = int(request.args.get("line", 1))
     except (ValueError, TypeError):
@@ -879,22 +1042,482 @@ def synctex_backward(project_id):
 
 @app.route("/api/projects/<project_id>/pdf", methods=["GET"])
 def get_pdf(project_id):
-    pdf_path = os.path.join(PROJECTS_DIR, project_id, "build", "main.pdf")
-    if not os.path.exists(pdf_path):
+    p_dir = os.path.join(PROJECTS_DIR, project_id)
+    build_dir = os.path.join(p_dir, "build")
+    if not os.path.exists(build_dir):
         return "PDF not found", 404
+        
+    root_doc = get_project_root_document(project_id)
+    doc_stem = os.path.splitext(os.path.basename(root_doc))[0]
+    pdf_path = os.path.join(build_dir, f"{doc_stem}.pdf")
+    if not os.path.exists(pdf_path):
+        candidates = [os.path.join(build_dir, f) for f in os.listdir(build_dir) if f.lower().endswith(".pdf")]
+        if candidates:
+            candidates.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+            pdf_path = candidates[0]
+        else:
+            return "PDF not found", 404
     return send_file(pdf_path, mimetype="application/pdf", as_attachment=False)
+
+@app.route("/viewer")
+def popout_viewer():
+    return send_from_directory("static", "viewer.html")
+
+@app.route("/api/projects/<project_id>/citations", methods=["GET"])
+def get_project_citations(project_id):
+    p_dir = os.path.join(PROJECTS_DIR, project_id)
+    if not os.path.exists(p_dir):
+        return jsonify({"success": False, "citations": []}), 404
+        
+    citations = []
+    seen_keys = set()
+    for root, dirs, files in os.walk(p_dir):
+        if "build" in root or ".history" in root:
+            continue
+        for file in files:
+            if file.lower().endswith(".bib"):
+                bib_path = os.path.join(root, file)
+                try:
+                    with open(bib_path, "r", encoding="utf-8", errors="ignore") as f:
+                        content = f.read()
+                    entries = re.findall(r'@([a-zA-Z]+)\s*\{\s*([a-zA-Z0-9_\-:\.]+)\s*,([\s\S]*?)(?=\n@|\Z)', content)
+                    for entry_type, key, body in entries:
+                        key = key.strip()
+                        if key in seen_keys:
+                            continue
+                        seen_keys.add(key)
+                        
+                        title_m = re.search(r'title\s*=\s*[\{\"]([^\"\}]+)[\}\"]', body, re.IGNORECASE)
+                        author_m = re.search(r'author\s*=\s*[\{\"]([^\"\}]+)[\}\"]', body, re.IGNORECASE)
+                        year_m = re.search(r'year\s*=\s*[\{\"]?(\d{4})[\}\"]?', body, re.IGNORECASE)
+                        
+                        citations.append({
+                            "key": key,
+                            "type": entry_type.lower(),
+                            "title": title_m.group(1).strip() if title_m else "",
+                            "author": author_m.group(1).strip() if author_m else "",
+                            "year": year_m.group(1).strip() if year_m else "",
+                            "file": os.path.relpath(bib_path, p_dir).replace("\\", "/")
+                        })
+                except Exception as e:
+                    print(f"[WARN] Error reading bib file {bib_path}: {e}")
+                    
+    return jsonify({"success": True, "citations": citations})
+
+@app.route("/api/projects/<project_id>/labels", methods=["GET"])
+def get_project_labels(project_id):
+    p_dir = os.path.join(PROJECTS_DIR, project_id)
+    if not os.path.exists(p_dir):
+        return jsonify({"success": False, "labels": []}), 404
+        
+    labels = []
+    seen_keys = set()
+    for root, dirs, files in os.walk(p_dir):
+        if "build" in root or ".history" in root:
+            continue
+        for file in files:
+            if file.lower().endswith(".tex"):
+                tex_path = os.path.join(root, file)
+                rel_file = os.path.relpath(tex_path, p_dir).replace("\\", "/")
+                try:
+                    with open(tex_path, "r", encoding="utf-8", errors="ignore") as f:
+                        for line_idx, line in enumerate(f, 1):
+                            code_part = line.split('%')[0]
+                            label_matches = re.findall(r'\\label\{([^}]+)\}', code_part)
+                            for lbl in label_matches:
+                                lbl = lbl.strip()
+                                if lbl in seen_keys:
+                                    continue
+                                seen_keys.add(lbl)
+                                
+                                lbl_lower = lbl.lower()
+                                if lbl_lower.startswith("fig:") or lbl_lower.startswith("figure:"):
+                                    lbl_type, icon = "插图 (Figure)", "🖼️"
+                                elif lbl_lower.startswith("tab:") or lbl_lower.startswith("table:"):
+                                    lbl_type, icon = "表格 (Table)", "📊"
+                                elif lbl_lower.startswith("sec:") or lbl_lower.startswith("section:"):
+                                    lbl_type, icon = "章节 (Section)", "📑"
+                                elif lbl_lower.startswith("eq:") or lbl_lower.startswith("equation:"):
+                                    lbl_type, icon = "公式 (Equation)", "🔢"
+                                else:
+                                    lbl_type, icon = "自定义标签", "🏷️"
+                                    
+                                labels.append({
+                                    "key": lbl,
+                                    "file": rel_file,
+                                    "line": line_idx,
+                                    "type": lbl_type,
+                                    "icon": icon
+                                })
+                except Exception as e:
+                    print(f"[WARN] Error reading tex file {tex_path}: {e}")
+                    
+    return jsonify({"success": True, "labels": labels})
+
+# --- Local History & Snapshot Manager ---
+def get_project_history_dir(project_id):
+    p_dir = os.path.join(PROJECTS_DIR, project_id)
+    h_dir = os.path.join(p_dir, ".history")
+    os.makedirs(h_dir, exist_ok=True)
+    return h_dir
+
+def get_project_history_settings(project_id):
+    p_dir = os.path.join(PROJECTS_DIR, project_id)
+    meta_path = os.path.join(p_dir, "meta.json")
+    default_settings = {
+        "auto_clean_enabled": True,
+        "mode": "keep_recent_count",
+        "days": 2,
+        "count": 20
+    }
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as mf:
+                meta = json.load(mf)
+            if "history_settings" in meta and isinstance(meta["history_settings"], dict):
+                default_settings.update(meta["history_settings"])
+        except Exception:
+            pass
+    return default_settings
+
+def save_project_history_settings(project_id, settings):
+    p_dir = os.path.join(PROJECTS_DIR, project_id)
+    meta_path = os.path.join(p_dir, "meta.json")
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as mf:
+                meta = json.load(mf)
+            if "history_settings" not in meta:
+                meta["history_settings"] = {}
+            meta["history_settings"].update(settings)
+            with open(meta_path, "w", encoding="utf-8") as mf:
+                json.dump(meta, mf, ensure_ascii=False, indent=2)
+            return True
+        except Exception as e:
+            print("[WARN] Error saving history settings:", e)
+    return False
+
+def apply_history_retention(project_id):
+    """Automatically cleans up unstarred snapshots according to project history settings."""
+    settings = get_project_history_settings(project_id)
+    if not settings.get("auto_clean_enabled", True):
+        return 0
+
+    h_dir = get_project_history_dir(project_id)
+    if not os.path.exists(h_dir):
+        return 0
+
+    snapshots = []
+    for d in os.listdir(h_dir):
+        m_path = os.path.join(h_dir, d, "manifest.json")
+        if os.path.exists(m_path):
+            try:
+                with open(m_path, "r", encoding="utf-8") as mf:
+                    manifest = json.load(mf)
+                snapshots.append((d, manifest))
+            except Exception:
+                pass
+
+    snapshots.sort(key=lambda x: x[1].get("timestamp", 0), reverse=True)
+    mode = settings.get("mode", "keep_recent_count")
+    try:
+        days = float(settings.get("days", 2))
+    except (ValueError, TypeError):
+        days = 2.0
+    try:
+        count = int(settings.get("count", 20))
+    except (ValueError, TypeError):
+        count = 20
+    now = time.time()
+    deleted_count = 0
+
+    if mode == "older_than_days":
+        cutoff = now - (days * 86400)
+        for d, m in snapshots:
+            if not m.get("starred", False) and m.get("timestamp", 0) < cutoff:
+                shutil.rmtree(os.path.join(h_dir, d), ignore_errors=True)
+                deleted_count += 1
+    elif mode == "keep_recent_count":
+        unstarred_seen = 0
+        for d, m in snapshots:
+            if not m.get("starred", False):
+                unstarred_seen += 1
+                if unstarred_seen > count:
+                    shutil.rmtree(os.path.join(h_dir, d), ignore_errors=True)
+                    deleted_count += 1
+
+    return deleted_count
+
+def create_project_snapshot(project_id, comment="自动保存快照", starred=False):
+    p_dir = os.path.join(PROJECTS_DIR, project_id)
+    if not os.path.exists(p_dir):
+        return None
+        
+    h_dir = get_project_history_dir(project_id)
+    snap_id = f"snap_{int(time.time() * 1000)}"
+    snap_dir = os.path.join(h_dir, snap_id)
+    os.makedirs(snap_dir, exist_ok=True)
+    
+    saved_files = []
+    TEXT_EXTS = {".tex", ".bib", ".sty", ".cls", ".txt", ".md", ".json"}
+    for root, dirs, files in os.walk(p_dir):
+        rel_root = os.path.relpath(root, p_dir)
+        if rel_root == "build" or rel_root.startswith("build" + os.sep):
+            continue
+        if rel_root == ".history" or rel_root.startswith(".history" + os.sep):
+            continue
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext in TEXT_EXTS:
+                src_path = os.path.join(root, f)
+                rel_path = os.path.relpath(src_path, p_dir)
+                dest_path = os.path.join(snap_dir, rel_path)
+                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                shutil.copy2(src_path, dest_path)
+                saved_files.append(rel_path.replace("\\", "/"))
+                
+    manifest = {
+        "id": snap_id,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp": time.time(),
+        "starred": bool(starred),
+        "comment": comment,
+        "root_document": get_project_root_document(project_id),
+        "files": saved_files
+    }
+    with open(os.path.join(snap_dir, "manifest.json"), "w", encoding="utf-8") as mf:
+        json.dump(manifest, mf, ensure_ascii=False, indent=2)
+
+    try:
+        apply_history_retention(project_id)
+    except Exception as re:
+        print("[WARN] Auto retention error:", re)
+        
+    return manifest
+
+@app.route("/api/projects/<project_id>/history", methods=["GET"])
+def list_project_history(project_id):
+    p_dir = os.path.join(PROJECTS_DIR, project_id)
+    if not os.path.exists(p_dir):
+        return jsonify({"success": False, "snapshots": []}), 404
+        
+    h_dir = get_project_history_dir(project_id)
+    snapshots = []
+    total_bytes = 0
+    if os.path.exists(h_dir):
+        for d in os.listdir(h_dir):
+            m_path = os.path.join(h_dir, d, "manifest.json")
+            if os.path.exists(m_path):
+                try:
+                    with open(m_path, "r", encoding="utf-8") as mf:
+                        manifest = json.load(mf)
+                    snapshots.append(manifest)
+                except Exception:
+                    pass
+        for root, _, files in os.walk(h_dir):
+            for f in files:
+                try:
+                    total_bytes += os.path.getsize(os.path.join(root, f))
+                except Exception:
+                    pass
+
+    snapshots.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+    return jsonify({
+        "success": True,
+        "snapshots": snapshots,
+        "total_size_kb": round(total_bytes / 1024, 1),
+        "settings": get_project_history_settings(project_id)
+    })
+
+@app.route("/api/projects/<project_id>/history/settings", methods=["GET", "POST"])
+def project_history_settings_route(project_id):
+    if request.method == "POST":
+        data = request.json or {}
+        save_project_history_settings(project_id, data)
+        apply_history_retention(project_id)
+    settings = get_project_history_settings(project_id)
+    h_dir = get_project_history_dir(project_id)
+    total_bytes = 0
+    total_count = 0
+    if os.path.exists(h_dir):
+        for d in os.listdir(h_dir):
+            m_path = os.path.join(h_dir, d, "manifest.json")
+            if os.path.exists(m_path):
+                total_count += 1
+        for root, _, files in os.walk(h_dir):
+            for f in files:
+                try:
+                    total_bytes += os.path.getsize(os.path.join(root, f))
+                except Exception:
+                    pass
+    return jsonify({
+        "success": True,
+        "settings": settings,
+        "total_count": total_count,
+        "total_size_kb": round(total_bytes / 1024, 1)
+    })
+
+@app.route("/api/projects/<project_id>/history/snapshot", methods=["POST"])
+def manual_project_snapshot(project_id):
+    data = request.json or {}
+    comment = data.get("comment", "").strip() or "手动保存快照"
+    starred = data.get("starred", False)
+    manifest = create_project_snapshot(project_id, comment=comment, starred=starred)
+    if manifest:
+        return jsonify({"success": True, "snapshot": manifest})
+    return jsonify({"success": False, "error": "创建快照失败"}), 500
+
+@app.route("/api/projects/<project_id>/history/<snapshot_id>/star", methods=["POST"])
+def toggle_snapshot_star(project_id, snapshot_id):
+    h_dir = get_project_history_dir(project_id)
+    m_path = os.path.join(h_dir, snapshot_id, "manifest.json")
+    if not os.path.exists(m_path):
+        return jsonify({"success": False, "error": "快照不存在"}), 404
+    try:
+        with open(m_path, "r", encoding="utf-8") as mf:
+            manifest = json.load(mf)
+        manifest["starred"] = not manifest.get("starred", False)
+        with open(m_path, "w", encoding="utf-8") as mf:
+            json.dump(manifest, mf, ensure_ascii=False, indent=2)
+        return jsonify({"success": True, "starred": manifest["starred"]})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route("/api/projects/<project_id>/history/<snapshot_id>/delete", methods=["DELETE", "POST"])
+def delete_single_snapshot(project_id, snapshot_id):
+    h_dir = get_project_history_dir(project_id)
+    snap_dir = os.path.join(h_dir, snapshot_id)
+    if os.path.exists(snap_dir):
+        shutil.rmtree(snap_dir, ignore_errors=True)
+        return jsonify({"success": True})
+    return jsonify({"success": False, "error": "快照不存在"}), 404
+
+@app.route("/api/projects/<project_id>/history/<snapshot_id>/content", methods=["GET"])
+def get_snapshot_content(project_id, snapshot_id):
+    h_dir = get_project_history_dir(project_id)
+    rel_path = request.args.get("path", "").strip().lstrip("/\\")
+    snap_dir = os.path.join(h_dir, snapshot_id)
+    if not os.path.exists(snap_dir):
+        return jsonify({"error": "快照不存在"}), 404
+        
+    if not rel_path:
+        m_path = os.path.join(snap_dir, "manifest.json")
+        if os.path.exists(m_path):
+            with open(m_path, "r", encoding="utf-8") as mf:
+                rel_path = json.load(mf).get("root_document", "main.tex")
+        else:
+            rel_path = "main.tex"
+            
+    target = os.path.join(snap_dir, rel_path)
+    if not os.path.exists(target):
+        return jsonify({"success": True, "content": "", "path": rel_path, "exists": False})
+        
+    try:
+        with open(target, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        return jsonify({"success": True, "content": content, "path": rel_path, "exists": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route("/api/projects/<project_id>/history/<snapshot_id>/restore", methods=["POST"])
+def restore_project_snapshot(project_id, snapshot_id):
+    p_dir = os.path.join(PROJECTS_DIR, project_id)
+    h_dir = get_project_history_dir(project_id)
+    snap_dir = os.path.join(h_dir, snapshot_id)
+    if not os.path.exists(snap_dir):
+        return jsonify({"success": False, "error": "指定历史快照不存在"}), 404
+        
+    create_project_snapshot(project_id, comment="还原前自动备份", starred=False)
+    
+    restored = []
+    for root, dirs, files in os.walk(snap_dir):
+        rel = os.path.relpath(root, snap_dir)
+        for f in files:
+            if f == "manifest.json":
+                continue
+            src_f = os.path.join(root, f)
+            dest_f = os.path.join(p_dir, rel, f) if rel != "." else os.path.join(p_dir, f)
+            os.makedirs(os.path.dirname(dest_f), exist_ok=True)
+            shutil.copy2(src_f, dest_f)
+            restored.append(os.path.relpath(dest_f, p_dir).replace("\\", "/"))
+            
+    return jsonify({"success": True, "restored_files": restored})
+
+@app.route("/api/projects/<project_id>/history/clean", methods=["POST"])
+def clean_project_history(project_id):
+    h_dir = get_project_history_dir(project_id)
+    if not os.path.exists(h_dir):
+        return jsonify({"success": True, "deleted_count": 0, "remaining_count": 0})
+        
+    data = request.json or {}
+    policy = data.get("policy", "older_than_days")
+    try:
+        days = float(data.get("days", 2))
+    except (ValueError, TypeError):
+        days = 2.0
+    try:
+        count = int(data.get("count", 10))
+    except (ValueError, TypeError):
+        count = 10
+    
+    snapshots = []
+    for d in os.listdir(h_dir):
+        m_path = os.path.join(h_dir, d, "manifest.json")
+        if os.path.exists(m_path):
+            try:
+                with open(m_path, "r", encoding="utf-8") as mf:
+                    manifest = json.load(mf)
+                snapshots.append((d, manifest))
+            except Exception:
+                pass
+                
+    snapshots.sort(key=lambda x: x[1].get("timestamp", 0), reverse=True)
+    deleted_count = 0
+    now = time.time()
+    
+    if policy == "clean_everything":
+        for d, _ in snapshots:
+            shutil.rmtree(os.path.join(h_dir, d), ignore_errors=True)
+            deleted_count += 1
+    elif policy == "clean_all_unstarred":
+        for d, m in snapshots:
+            if not m.get("starred", False):
+                shutil.rmtree(os.path.join(h_dir, d), ignore_errors=True)
+                deleted_count += 1
+    elif policy == "older_than_days":
+        cutoff = now - (days * 86400)
+        for d, m in snapshots:
+            if not m.get("starred", False) and m.get("timestamp", 0) < cutoff:
+                shutil.rmtree(os.path.join(h_dir, d), ignore_errors=True)
+                deleted_count += 1
+    elif policy == "keep_recent_count":
+        unstarred_seen = 0
+        for d, m in snapshots:
+            if not m.get("starred", False):
+                unstarred_seen += 1
+                if unstarred_seen > count:
+                    shutil.rmtree(os.path.join(h_dir, d), ignore_errors=True)
+                    deleted_count += 1
+                    
+    remaining = len(os.listdir(h_dir)) if os.path.exists(h_dir) else 0
+    return jsonify({
+        "success": True,
+        "deleted_count": deleted_count,
+        "remaining_count": remaining
+    })
 
 @app.route("/api/system/info", methods=["GET"])
 def system_info():
     cache_size_bytes = 0
-    if os.path.exists(CACHE_DIR):
+    include_size = request.args.get("include_size", "0") == "1"
+    if include_size and os.path.exists(CACHE_DIR):
         for root, dirs, files in os.walk(CACHE_DIR):
             for f in files:
                 cache_size_bytes += os.path.getsize(os.path.join(root, f))
     
     return jsonify({
         "cache_dir": CACHE_DIR,
-        "cache_size_mb": round(cache_size_bytes / 1024 / 1024, 2),
+        "cache_size_mb": round(cache_size_bytes / 1024 / 1024, 2) if include_size else None,
         "projects_dir": PROJECTS_DIR,
         "tectonic_path": TECTONIC_EXE
     })
@@ -981,16 +1604,15 @@ def launch_edge_app():
 
     import socket
     attempts = 0
-    for attempts in range(60):
-        time.sleep(0.05)
+    for attempts in range(120):
         try:
             s = socket.socket()
-            s.settimeout(0.1)
+            s.settimeout(0.05)
             s.connect(("127.0.0.1", 5820))
             s.close()
             break
         except Exception:
-            pass
+            time.sleep(0.015)
 
     log_msg(f"[EDGE] Server port ready after {attempts} checks. Spawning Edge window...")
 
@@ -1028,6 +1650,7 @@ def launch_edge_app():
             f"--app={url}",
             f"--user-data-dir={profile_dir}",
             "--window-size=1280,820",
+            "--no-proxy-server",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-component-update",
@@ -1071,8 +1694,8 @@ if __name__ == "__main__":
         log_msg("[STARTUP] Secondary process exiting cleanly after requesting window focus.")
         sys.exit(0)
 
-    # Server starting fresh: clean any dead Edge orphans holding our profile
-    cleanup_zombie_edge()
+    # Server starting fresh: clean any dead Edge orphans asynchronously so it never blocks Flask startup
+    threading.Thread(target=cleanup_zombie_edge, daemon=True).start()
 
     # Launch Edge browser as soon as server socket is ready
     threading.Thread(target=launch_edge_app, daemon=True).start()

@@ -10,11 +10,8 @@ set "PY_FALLBACK="
 if exist "%~dp0.python_path" (
     set /p CACHED_PY=<"%~dp0.python_path"
     if exist "!CACHED_PY!" (
-        "!CACHED_PY!" -c "import flask" >nul 2>nul
-        if !errorlevel! equ 0 (
-            set "PY_EXE=!CACHED_PY!"
-            goto :LAUNCH
-        )
+        set "PY_EXE=!CACHED_PY!"
+        goto :LAUNCH
     )
 )
 
@@ -85,7 +82,7 @@ if not "!PY_FALLBACK!"=="" (
     echo ========================================================
     echo   [PaperLeaf 依赖检测]
     echo   检测到系统 Python: !PY_FALLBACK!
-    echo   但尚未安装所需依赖库（Flask、Pillow、pypdf等）。
+    echo   但尚未安装所需依赖库（Flask、Pillow、psutil等）。
     echo ========================================================
     echo.
     echo   正在为您自动安装依赖，请稍候...

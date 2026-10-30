@@ -15,6 +15,73 @@ try {
   }
 } catch (e) {}
 
+// Academic productivity cache & SyncTeX Broadcast Channel
+let projectCitations = [];
+let projectLabels = [];
+let synctexBroadcastChannel = null;
+
+async function fetchProjectCitations() {
+  if (!currentProjectId) return;
+  try {
+    const res = await fetch(`/api/projects/${currentProjectId}/citations`);
+    const data = await res.json();
+    if (data.success && Array.isArray(data.citations)) {
+      projectCitations = data.citations;
+    }
+  } catch (e) {
+    console.warn('Failed to fetch citations:', e);
+  }
+}
+
+async function fetchProjectLabels() {
+  if (!currentProjectId) return;
+  try {
+    const res = await fetch(`/api/projects/${currentProjectId}/labels`);
+    const data = await res.json();
+    if (data.success && Array.isArray(data.labels)) {
+      projectLabels = data.labels;
+    }
+  } catch (e) {
+    console.warn('Failed to fetch labels:', e);
+  }
+}
+
+function initSynctexBroadcastChannel() {
+  if (synctexBroadcastChannel) {
+    try { synctexBroadcastChannel.close(); } catch(e){}
+    synctexBroadcastChannel = null;
+  }
+  if (typeof BroadcastChannel !== 'undefined' && currentProjectId) {
+    synctexBroadcastChannel = new BroadcastChannel('paperleaf_synctex_' + currentProjectId);
+    synctexBroadcastChannel.onmessage = async (e) => {
+      const msg = e.data || {};
+      if (msg.type === 'synctex_backward') {
+        if (currentViewMode === 'paper') {
+          setViewMode('split');
+        }
+        if (msg.file && msg.file !== currentActiveFile) {
+          await switchActiveFile(msg.file);
+        }
+        if (editor && typeof editor.setCursor === 'function') {
+          const lineIdx = Math.max(0, (msg.line || 1) - 1);
+          editor.setCursor({ line: lineIdx, ch: 0 });
+          editor.scrollIntoView({ line: lineIdx, ch: 0 }, 140);
+          editor.focus();
+          const lineHandle = editor.addLineClass(lineIdx, 'background', 'cm-synctex-active-line');
+          setTimeout(() => {
+            editor.removeLineClass(lineHandle, 'background', 'cm-synctex-active-line');
+          }, 1800);
+          setCompileStatus('idle', `🎯 双屏同步：已跳转至 ${msg.file || 'main.tex'} 第 ${msg.line} 行`);
+        }
+      } else if (msg.type === 'popout_closing') {
+        if (currentViewMode === 'code') {
+          setViewMode('split');
+        }
+      }
+    };
+  }
+}
+
 function applySplitRatio() {
   if (currentViewMode === 'split') {
     const leftWeight = Math.max(0.15, Math.min(0.85, splitRatio));
@@ -56,6 +123,7 @@ let pdfRenderTasks = [];
 const toggleAutoCompile = document.getElementById('toggle-autocompile');
 const saveIndicator = document.getElementById('save-indicator');
 let isSwitchingFile = false;
+let isSwitchingProject = false;
 
 function setSaveStatus(state, timeStr) {
   if (!saveIndicator) return;
@@ -239,7 +307,111 @@ const LATEX_COMPLETIONS = [
 function latexHint(cm) {
   const cur = cm.getCursor();
   const line = cm.getLine(cur.line);
-  
+  const textBefore = line.slice(0, cur.ch);
+
+  // 1. Dynamic \cite{...} Citation Autocomplete
+  const citeMatch = textBefore.match(/(?:\\cite[a-zA-Z*]*|\\citep|\\citet|\\autocite)\{([^}]*)$/);
+  if (citeMatch) {
+    const rawKeys = citeMatch[1];
+    const lastCommaIdx = rawKeys.lastIndexOf(',');
+    const query = (lastCommaIdx >= 0 ? rawKeys.slice(lastCommaIdx + 1) : rawKeys).trimStart();
+    const queryLower = query.toLowerCase();
+    const fromCh = cur.ch - query.length;
+
+    const matches = [];
+    for (const c of projectCitations) {
+      const kMatch = c.key && c.key.toLowerCase().includes(queryLower);
+      const tMatch = c.title && c.title.toLowerCase().includes(queryLower);
+      const aMatch = c.author && c.author.toLowerCase().includes(queryLower);
+      if (!query || kMatch || tMatch || aMatch) {
+        matches.push({
+          text: c.key,
+          displayText: c.key,
+          citation: c,
+          render: function(element, self, data) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'cm-hint-row cm-hint-cite';
+            const iconSpan = document.createElement('span');
+            iconSpan.className = 'cm-hint-icon';
+            iconSpan.textContent = '📚';
+            const keySpan = document.createElement('span');
+            keySpan.className = 'cm-hint-cmd';
+            keySpan.textContent = data.text;
+            const descSpan = document.createElement('span');
+            descSpan.className = 'cm-hint-desc';
+            const yr = data.citation.year ? ` (${data.citation.year})` : '';
+            const auth = data.citation.author ? data.citation.author.split(' and ')[0] + ' et al.' : '';
+            const titleShort = data.citation.title ? (data.citation.title.length > 36 ? data.citation.title.slice(0, 33) + '...' : data.citation.title) : '';
+            descSpan.textContent = [auth, yr, titleShort].filter(Boolean).join(' - ');
+            wrapper.appendChild(iconSpan);
+            wrapper.appendChild(keySpan);
+            if (descSpan.textContent) wrapper.appendChild(descSpan);
+            element.appendChild(wrapper);
+          },
+          hint: function(cm, self, data) {
+            cm.replaceRange(data.text, self.from, self.to);
+          }
+        });
+      }
+    }
+    if (matches.length > 0) {
+      return {
+        list: matches,
+        from: CodeMirror.Pos(cur.line, fromCh),
+        to: CodeMirror.Pos(cur.line, cur.ch)
+      };
+    }
+  }
+
+  // 2. Dynamic \ref{...} Label Autocomplete
+  const refMatch = textBefore.match(/(?:\\ref|\\eqref|\\pageref|\\autoref|\\cref|\\Cref)\{([^}]*)$/);
+  if (refMatch) {
+    const rawKeys = refMatch[1];
+    const lastCommaIdx = rawKeys.lastIndexOf(',');
+    const query = (lastCommaIdx >= 0 ? rawKeys.slice(lastCommaIdx + 1) : rawKeys).trimStart();
+    const queryLower = query.toLowerCase();
+    const fromCh = cur.ch - query.length;
+
+    const matches = [];
+    for (const l of projectLabels) {
+      if (!query || l.key.toLowerCase().includes(queryLower)) {
+        matches.push({
+          text: l.key,
+          displayText: l.key,
+          label: l,
+          render: function(element, self, data) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'cm-hint-row cm-hint-ref';
+            const iconSpan = document.createElement('span');
+            iconSpan.className = 'cm-hint-icon';
+            iconSpan.textContent = data.label.icon || '🏷️';
+            const keySpan = document.createElement('span');
+            keySpan.className = 'cm-hint-cmd';
+            keySpan.textContent = data.text;
+            const descSpan = document.createElement('span');
+            descSpan.className = 'cm-hint-desc';
+            descSpan.textContent = `[${data.label.type}] ${data.label.file}:${data.label.line}`;
+            wrapper.appendChild(iconSpan);
+            wrapper.appendChild(keySpan);
+            wrapper.appendChild(descSpan);
+            element.appendChild(wrapper);
+          },
+          hint: function(cm, self, data) {
+            cm.replaceRange(data.text, self.from, self.to);
+          }
+        });
+      }
+    }
+    if (matches.length > 0) {
+      return {
+        list: matches,
+        from: CodeMirror.Pos(cur.line, fromCh),
+        to: CodeMirror.Pos(cur.line, cur.ch)
+      };
+    }
+  }
+
+  // 3. Standard LaTeX Commands & Environments
   let start = cur.ch;
   while (start > 0 && /[\w\\@]/.test(line.charAt(start - 1))) {
     start--;
@@ -354,10 +526,21 @@ function initEditor() {
     });
 
     editor.on('inputRead', (cm, change) => {
-      // Trigger autocomplete when typing \ or letters
+      // Trigger autocomplete when typing \ or letters, or inside \cite{ / \ref{
       if (change.origin === '+input') {
         const cur = cm.getCursor();
         const line = cm.getLine(cur.line);
+        const textBefore = line.slice(0, cur.ch);
+
+        // Immediate trigger inside \cite{ or \ref{
+        if (/(?:\\cite[a-zA-Z*]*|\\citep|\\citet|\\autocite)\{[^}]*$/.test(textBefore) ||
+            /(?:\\ref|\\eqref|\\pageref|\\autoref|\\cref|\\Cref)\{[^}]*$/.test(textBefore)) {
+          if (!cm.state.completionActive && typeof cm.showHint === 'function') {
+            cm.showHint({ hint: latexHint, completeSingle: false });
+            return;
+          }
+        }
+
         let start = cur.ch;
         while (start > 0 && /[\w\\@]/.test(line.charAt(start - 1))) {
           start--;
@@ -416,6 +599,64 @@ function initEditor() {
   }
 }
 
+let autoSnapshotTimer = null;
+let lastSnapshotContent = '';
+let lastSnapshotTimestamp = 0;
+const AUTO_SNAPSHOT_IDLE_DELAY = 45000; // 45 seconds idle after typing
+const AUTO_SNAPSHOT_MAX_INTERVAL = 180000; // 3 minutes maximum interval while continuously typing
+
+function scheduleAutoEditSnapshot() {
+  if (!currentProjectId || !editor || isSwitchingProject || isSwitchingFile || !isEditableFile(currentActiveFile)) return;
+  const currentContent = editor.getValue();
+  if (!currentContent || currentContent === lastSnapshotContent) return;
+
+  const now = Date.now();
+  // If user has been continuously editing for 3 minutes without pause
+  if (lastSnapshotTimestamp && (now - lastSnapshotTimestamp >= AUTO_SNAPSHOT_MAX_INTERVAL)) {
+    triggerAutoEditSnapshot();
+    return;
+  }
+
+  // Debounce for 45s idle pause
+  if (autoSnapshotTimer) clearTimeout(autoSnapshotTimer);
+  autoSnapshotTimer = setTimeout(() => {
+    triggerAutoEditSnapshot();
+  }, AUTO_SNAPSHOT_IDLE_DELAY);
+}
+
+async function triggerAutoEditSnapshot() {
+  if (!currentProjectId || !editor || isSwitchingProject || isSwitchingFile || !isEditableFile(currentActiveFile)) return;
+  const currentContent = editor.getValue();
+  if (!currentContent || currentContent === lastSnapshotContent) return;
+
+  lastSnapshotContent = currentContent;
+  lastSnapshotTimestamp = Date.now();
+
+  const now = new Date();
+  const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const fileName = currentActiveFile ? currentActiveFile.split('/').pop() : 'main.tex';
+
+  try {
+    const res = await fetch(`/api/projects/${currentProjectId}/history/snapshot`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        comment: `📝 自动编辑工作底稿 (${fileName} ${timeStr})`,
+        starred: false
+      })
+    });
+    const data = await res.json();
+    if (data.success) {
+      const historyView = document.getElementById('view-history');
+      if (historyView && !historyView.classList.contains('hidden')) {
+        loadProjectHistory();
+      }
+    }
+  } catch (err) {
+    console.warn('Auto edit snapshot error:', err);
+  }
+}
+
 function onCodeChanged() {
   setSaveStatus('saving');
 
@@ -432,6 +673,9 @@ function onCodeChanged() {
     saveDebounceTimer = setTimeout(saveContent, 300);
   }
 
+  // Automatic edit timeline checkpoint (45s idle / 3min continuous)
+  scheduleAutoEditSnapshot();
+
   // Debounced outline update (400ms)
   clearTimeout(window._outlineTimer);
   window._outlineTimer = setTimeout(updateOutline, 400);
@@ -445,15 +689,18 @@ function onCodeChanged() {
   }
 }
 
+let allProjectsCache = [];
+
 // --- 3. API Communication ---
 async function loadProjects() {
   try {
     const res = await fetch('/api/projects');
     const data = await res.json();
-    renderProjects(data.projects);
+    allProjectsCache = data.projects || [];
+    renderProjects(allProjectsCache);
     
-    if (data.projects.length > 0 && !currentProjectId) {
-      selectProject(data.projects[0].id);
+    if (allProjectsCache.length > 0 && !currentProjectId) {
+      await selectProject(allProjectsCache[0].id, allProjectsCache[0]);
     }
   } catch (err) {
     console.error('Failed to load projects:', err);
@@ -480,9 +727,9 @@ function renderProjects(projects) {
       </button>
     `;
 
-    item.addEventListener('click', (e) => {
+    item.addEventListener('click', async (e) => {
       if (e.target.closest('.btn-delete-proj')) return;
-      selectProject(p.id);
+      await selectProject(p.id, p);
     });
 
     const deleteBtn = item.querySelector('.btn-delete-proj');
@@ -521,9 +768,82 @@ function downloadProjectFile(relPath) {
   document.body.removeChild(a);
 }
 
-function getFileIcon(ext, isDir) {
+// Collapsed folders tracker (paths relative to project root)
+let collapsedFolders = new Set();
+
+function initProjectCollapsedFolders(projectId) {
+  if (!projectId) return;
+  try {
+    const raw = localStorage.getItem(`paperleaf_collapsed_dirs_${projectId}`);
+    collapsedFolders = new Set(raw ? JSON.parse(raw) : []);
+  } catch (e) {
+    collapsedFolders = new Set();
+  }
+}
+
+function saveCollapsedFolders() {
+  if (!currentProjectId) return;
+  try {
+    localStorage.setItem(`paperleaf_collapsed_dirs_${currentProjectId}`, JSON.stringify([...collapsedFolders]));
+  } catch (e) {}
+}
+
+function toggleFolderCollapse(folderPath) {
+  if (collapsedFolders.has(folderPath)) {
+    collapsedFolders.delete(folderPath);
+  } else {
+    collapsedFolders.add(folderPath);
+  }
+  saveCollapsedFolders();
+  updateFileTreeVisibility();
+}
+
+function updateFileTreeVisibility() {
+  const treeList = document.getElementById('file-tree-list');
+  if (!treeList) return;
+  const items = treeList.querySelectorAll('.tree-item');
+  items.forEach(el => {
+    const p = el.dataset.path;
+    if (!p) return;
+    const isDir = el.dataset.isDir === 'true';
+
+    if (isDir) {
+      const isCollapsed = collapsedFolders.has(p);
+      el.classList.toggle('collapsed', isCollapsed);
+      const caret = el.querySelector('.tree-dir-caret');
+      if (caret) caret.textContent = isCollapsed ? '▸' : '▾';
+      const icon = el.querySelector('.tree-item-icon');
+      if (icon) {
+        icon.innerHTML = isCollapsed
+          ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="#f59e0b" stroke="#d97706" stroke-width="1.5" style="vertical-align:-2px"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`
+          : `<svg width="14" height="14" viewBox="0 0 24 24" fill="#f59e0b" stroke="#d97706" stroke-width="1.5" style="vertical-align:-2px"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><polygon points="2 10 22 10 19 21 5 21 2 10" fill="#fbbf24"/></svg>`;
+      }
+    }
+
+    // Check if hidden by any ancestor directory
+    const parts = p.split('/');
+    let isHiddenByAncestor = false;
+    for (let i = 1; i < parts.length; i++) {
+      const ancestorPath = parts.slice(0, i).join('/');
+      if (collapsedFolders.has(ancestorPath)) {
+        isHiddenByAncestor = true;
+        break;
+      }
+    }
+
+    if (isHiddenByAncestor) {
+      el.classList.add('hidden');
+    } else {
+      el.classList.remove('hidden');
+    }
+  });
+}
+
+function getFileIcon(ext, isDir, isCollapsed = false) {
   if (isDir) {
-    return `<svg width="14" height="14" viewBox="0 0 24 24" fill="#f59e0b" stroke="#d97706" stroke-width="1.5" style="vertical-align:-2px"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+    return isCollapsed
+      ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="#f59e0b" stroke="#d97706" stroke-width="1.5" style="vertical-align:-2px"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`
+      : `<svg width="14" height="14" viewBox="0 0 24 24" fill="#f59e0b" stroke="#d97706" stroke-width="1.5" style="vertical-align:-2px"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><polygon points="2 10 22 10 19 21 5 21 2 10" fill="#fbbf24"/></svg>`;
   }
   switch (ext) {
     case 'png':
@@ -561,19 +881,37 @@ function renderFileTree(files) {
     const item = document.createElement('div');
     const isCurrent = f.path === currentActiveFile;
     const isDir = Boolean(f.is_dir);
-    item.className = `tree-item ${isDir ? 'tree-dir-item' : ''} ${isCurrent ? 'active' : ''}`;
+    const isCollapsed = isDir && collapsedFolders.has(f.path);
+    item.className = `tree-item ${isDir ? 'tree-dir-item' : ''} ${isCollapsed ? 'collapsed' : ''} ${isCurrent ? 'active' : ''}`;
+    item.dataset.path = f.path;
+    item.dataset.isDir = isDir ? 'true' : 'false';
 
     // Visual depth indentation based on directory slashes
     const depth = Math.max(0, f.path.split('/').length - 1);
     item.style.paddingLeft = `${8 + depth * 14}px`;
 
-    const icon = getFileIcon(f.ext, isDir);
+    // Check if hidden by any ancestor directory
+    const parts = f.path.split('/');
+    let isHiddenByAncestor = false;
+    for (let i = 1; i < parts.length; i++) {
+      const ancestorPath = parts.slice(0, i).join('/');
+      if (collapsedFolders.has(ancestorPath)) {
+        isHiddenByAncestor = true;
+        break;
+      }
+    }
+    if (isHiddenByAncestor) {
+      item.classList.add('hidden');
+    }
+
+    const icon = getFileIcon(f.ext, isDir, isCollapsed);
     const isImageOrPdf = !isDir && ['png', 'jpg', 'jpeg', 'gif', 'svg', 'pdf', 'eps'].includes(f.ext);
     const isEditable = !isDir && (['tex', 'bib', 'cls', 'sty', 'txt'].includes(f.ext) || !isImageOrPdf);
 
     if (isDir) {
       item.innerHTML = `
-        <div class="tree-item-left" title="文件夹: ${escapeHtml(f.path)}">
+        <div class="tree-item-left" title="点击折叠/展开文件夹: ${escapeHtml(f.path)}">
+          <span class="tree-dir-caret">${isCollapsed ? '▸' : '▾'}</span>
           <span class="tree-item-icon">${icon}</span>
           <span class="tree-item-name">${escapeHtml(f.name)}</span>
         </div>
@@ -584,11 +922,22 @@ function renderFileTree(files) {
         </div>
       `;
 
+      // Folder click to toggle collapse
+      item.addEventListener('click', (e) => {
+        if (e.target.closest('.tree-btn')) return;
+        toggleFolderCollapse(f.path);
+      });
+
       // Folder actions
       const uploadBtn = item.querySelector('.btn-folder-upload');
       if (uploadBtn) {
         uploadBtn.addEventListener('click', (e) => {
           e.stopPropagation();
+          if (collapsedFolders.has(f.path)) {
+            collapsedFolders.delete(f.path);
+            saveCollapsedFolders();
+            updateFileTreeVisibility();
+          }
           currentUploadTargetDir = f.path;
           const inputUpload = document.getElementById('input-tree-upload');
           if (inputUpload) {
@@ -613,6 +962,10 @@ function renderFileTree(files) {
             });
             const data = await res.json();
             if (data.success) {
+              if (collapsedFolders.has(f.path)) {
+                collapsedFolders.delete(f.path);
+                saveCollapsedFolders();
+              }
               await loadFileTree();
               await switchActiveFile(targetRel);
             } else {
@@ -634,17 +987,50 @@ function renderFileTree(files) {
         });
       }
     } else {
+      item.dataset.path = f.path;
+      item.dataset.isDir = 'false';
+      const isRoot = Boolean(f.is_root);
+      const isTex = (f.ext || '').toLowerCase() === 'tex';
       item.innerHTML = `
         <div class="tree-item-left" title="${escapeHtml(f.path)}">
           <span class="tree-item-icon">${icon}</span>
           <span class="tree-item-name">${escapeHtml(f.name)}</span>
+          ${isRoot ? `<span class="badge-root-doc" title="主编译文档 (Root Document)">📌 主文档</span>` : ''}
         </div>
         <div class="tree-item-actions">
+          ${isTex && !isRoot ? `<button class="tree-btn btn-set-root" title="设为主编译文档">📌</button>` : ''}
           ${isImageOrPdf ? `<button class="tree-btn btn-copy-figure" title="复制 LaTeX 插图代码">📋</button>` : ''}
           <button class="tree-btn btn-download-file" title="下载此文件【${escapeHtml(f.name)}】到本地">⬇</button>
-          ${f.name !== 'main.tex' ? `<button class="tree-btn btn-delete-file" title="删除文件">✕</button>` : ''}
+          ${!isRoot ? `<button class="tree-btn btn-delete-file" title="删除文件">✕</button>` : ''}
         </div>
       `;
+
+      // Set as root document
+      const setRootBtn = item.querySelector('.btn-set-root');
+      if (setRootBtn) {
+        setRootBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          try {
+            const res = await fetch(`/api/projects/${currentProjectId}/set_root_document`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ root_document: f.path })
+            });
+            const data = await res.json();
+            if (data.success) {
+              if (currentProjectMeta) {
+                currentProjectMeta.root_document = f.path;
+              }
+              await loadFileTree();
+              triggerCompile(true);
+            } else {
+              alert('设置主文档失败: ' + (data.error || '未知错误'));
+            }
+          } catch (err) {
+            alert('设置主文档异常: ' + err);
+          }
+        });
+      }
 
       // Click to view/edit
       item.addEventListener('click', async (e) => {
@@ -696,13 +1082,18 @@ function renderFileTree(files) {
 // Overleaf-Style Multi-Tab Management
 let openEditorTabs = ['main.tex'];
 
+function getActiveRootDocument() {
+  return currentProjectMeta?.root_document || 'main.tex';
+}
+
 function renderEditorTabs() {
   const container = document.getElementById('editor-tabs-container');
   if (!container) return;
   container.innerHTML = '';
 
-  if (!openEditorTabs.includes('main.tex')) {
-    openEditorTabs.unshift('main.tex');
+  const rootDoc = getActiveRootDocument();
+  if (!openEditorTabs.includes(rootDoc)) {
+    openEditorTabs.unshift(rootDoc);
   }
 
   openEditorTabs.forEach(filePath => {
@@ -716,11 +1107,12 @@ function renderEditorTabs() {
     const isDir = false;
     const icon = getFileIcon(ext, isDir);
     const fileName = filePath.split('/').pop();
+    const isRoot = (filePath === rootDoc);
 
     tab.innerHTML = `
       <span class="editor-tab-icon">${icon}</span>
       <span class="editor-tab-name">${escapeHtml(fileName)}</span>
-      ${filePath !== 'main.tex' ? `<span class="editor-tab-close" title="关闭标签页">×</span>` : ''}
+      ${!isRoot ? `<span class="editor-tab-close" title="关闭标签页">×</span>` : ''}
     `;
 
     // Click tab to activate
@@ -754,13 +1146,14 @@ function openEditorTab(filePath) {
 }
 
 async function closeEditorTab(filePath) {
-  if (filePath === 'main.tex') return;
+  const rootDoc = getActiveRootDocument();
+  if (filePath === rootDoc) return;
   const idx = openEditorTabs.indexOf(filePath);
   if (idx !== -1) {
     openEditorTabs.splice(idx, 1);
   }
   if (currentActiveFile === filePath) {
-    const nextTab = openEditorTabs[Math.max(0, idx - 1)] || 'main.tex';
+    const nextTab = openEditorTabs[Math.max(0, idx - 1)] || rootDoc;
     await activateTabByPath(nextTab);
   } else {
     renderEditorTabs();
@@ -1239,12 +1632,13 @@ async function deleteProjectFile(relPath) {
     });
     const data = await res.json();
     if (data.success) {
+      const rootDoc = getActiveRootDocument();
       openEditorTabs = openEditorTabs.filter(p => p !== relPath && !p.startsWith(relPath + '/'));
-      if (!openEditorTabs.includes('main.tex')) {
-        openEditorTabs.unshift('main.tex');
+      if (!openEditorTabs.includes(rootDoc)) {
+        openEditorTabs.unshift(rootDoc);
       }
       if (currentActiveFile === relPath || currentActiveFile.startsWith(relPath + '/')) {
-        await switchActiveFile('main.tex');
+        await switchActiveFile(rootDoc);
       } else {
         loadFileTree();
         renderEditorTabs();
@@ -1289,7 +1683,7 @@ async function uploadFilesToProject(fileList, targetDir = '') {
   }
 }
 
-async function selectProject(projectId) {
+async function selectProject(projectId, cachedMeta = null) {
   // Cancel pending timers from previous project before switching
   if (saveDebounceTimer) {
     clearTimeout(saveDebounceTimer);
@@ -1300,62 +1694,34 @@ async function selectProject(projectId) {
     compileDebounceTimer = null;
   }
 
+  isSwitchingProject = true;
+  isSwitchingFile = true;
+
+  // Immediately clear editor content during transition so stale code from
+  // the previous project cannot leak, be read, or be accidentally auto-saved into the new project!
+  if (editor && typeof editor.setValue === 'function') {
+    editor.setValue('');
+  }
+
   currentProjectId = projectId;
-  currentActiveFile = 'main.tex';
-  openEditorTabs = ['main.tex'];
+  initProjectCollapsedFolders(projectId);
   hideDiagnosticBanner();
   hideErrors();
 
-  const formatBar = document.getElementById('editor-format-bar');
-  if (formatBar) {
-    formatBar.classList.remove('hidden');
-    formatBar.style.display = '';
-  }
-  const editorTools = document.getElementById('editor-tools');
-  if (editorTools) {
-    editorTools.classList.remove('hidden');
-    editorTools.style.display = '';
-  }
-  const mediaWrapper = document.getElementById('media-preview-wrapper');
-  const editorWrapper = document.getElementById('editor-wrapper');
-  if (mediaWrapper && editorWrapper) {
-    mediaWrapper.classList.add('hidden');
-    editorWrapper.style.display = 'block';
-  }
-  renderEditorTabs();
-  const fileNameHeader = document.querySelector('.pane-header .file-name');
-  if (fileNameHeader) fileNameHeader.textContent = `📄 main.tex`;
-
-  // Update active state in UI
-  document.querySelectorAll('.project-item').forEach(el => {
-    el.classList.toggle('active', el.querySelector(`[data-id="${projectId}"]`) !== null);
-  });
-
+  let targetRoot = 'main.tex';
   try {
-    const res = await fetch(`/api/projects/${projectId}/content?path=main.tex`);
-    const data = await res.json();
-    
-    // Check if localStorage has newer draft
-    isSwitchingFile = true;
-    try {
-      const localDraft = localStorage.getItem(`draft_${projectId}_main.tex`);
-      if (localDraft && localDraft.length !== data.content.length) {
-        editor.setValue(localDraft);
-      } else {
-        editor.setValue(data.content);
-      }
-    } finally {
-      isSwitchingFile = false;
+    let meta = cachedMeta || allProjectsCache.find(p => p.id === projectId);
+    if (!meta) {
+      try {
+        const projRes = await fetch('/api/projects');
+        const pData = await projRes.json();
+        allProjectsCache = pData.projects || [];
+        meta = allProjectsCache.find(p => p.id === projectId);
+      } catch (e) {}
     }
-
-    setSaveStatus('saved');
-
-    // Fetch meta
-    const projRes = await fetch('/api/projects');
-    const pData = await projRes.json();
-    const meta = pData.projects.find(p => p.id === projectId);
     if (meta) {
       currentProjectMeta = meta;
+      targetRoot = meta.root_document || 'main.tex';
       document.getElementById('current-project-title').textContent = meta.name;
       const langText = document.getElementById('current-project-lang-text');
       if (langText) {
@@ -1370,18 +1736,83 @@ async function selectProject(projectId) {
       }
     }
 
-    // Refresh file tree & outline
-    await loadFileTree(projectId);
+    currentActiveFile = targetRoot;
+    openEditorTabs = [targetRoot];
+
+    const formatBar = document.getElementById('editor-format-bar');
+    if (formatBar) {
+      formatBar.classList.remove('hidden');
+      formatBar.style.display = '';
+    }
+    const editorTools = document.getElementById('editor-tools');
+    if (editorTools) {
+      editorTools.classList.remove('hidden');
+      editorTools.style.display = '';
+    }
+    const mediaWrapper = document.getElementById('media-preview-wrapper');
+    const editorWrapper = document.getElementById('editor-wrapper');
+    if (mediaWrapper && editorWrapper) {
+      mediaWrapper.classList.add('hidden');
+      editorWrapper.style.display = 'block';
+    }
+    renderEditorTabs();
+    const fileNameHeader = document.querySelector('.pane-header .file-name');
+    if (fileNameHeader) fileNameHeader.textContent = `📄 ${targetRoot}`;
+
+    // Update active state in UI
+    document.querySelectorAll('.project-item').forEach(el => {
+      el.classList.toggle('active', el.querySelector(`[data-id="${projectId}"]`) !== null);
+    });
+
+    // Parallel fetch: Load document content AND file tree simultaneously
+    const [contentRes, fileTreeRes] = await Promise.all([
+      fetch(`/api/projects/${projectId}/content?path=${encodeURIComponent(targetRoot)}`),
+      fetch(`/api/projects/${projectId}/files`)
+    ]);
+    const [contentData, fileTreeData] = await Promise.all([
+      contentRes.json(),
+      fileTreeRes.json()
+    ]);
+    
+    // Always load the true authoritative content from local disk
+    if (editor && typeof editor.setValue === 'function') {
+      editor.setValue(contentData.content || '');
+    }
+    lastSnapshotContent = contentData.content || '';
+    lastSnapshotTimestamp = Date.now();
+    try {
+      localStorage.removeItem(`draft_${projectId}_${targetRoot}`);
+    } catch (e) {}
+
+    setSaveStatus('saved');
+
+    // Render file tree & outline
+    renderFileTree(fileTreeData.files || []);
     updateOutline();
+    initSynctexBroadcastChannel();
+    
+    // Defer non-critical citations & labels to background
+    setTimeout(() => {
+      fetchProjectCitations();
+      fetchProjectLabels();
+    }, 50);
+
+    if (document.getElementById('view-history') && document.getElementById('view-history').classList.contains('active')) {
+      loadProjectHistory();
+    }
   } catch (err) {
     console.error('Failed to load project content:', err);
+  } finally {
+    isSwitchingFile = false;
+    isSwitchingProject = false;
   }
 }
 
 async function saveContent() {
-  if (!currentProjectId || !editor) return;
+  if (!currentProjectId || !editor || isSwitchingProject || isSwitchingFile) return;
   if (!isEditableFile(currentActiveFile)) return;
   const content = editor.getValue();
+  if (isSwitchingProject || isSwitchingFile) return;
   try {
     const res = await fetch(`/api/projects/${currentProjectId}/content?path=${encodeURIComponent(currentActiveFile)}`, {
       method: 'POST',
@@ -1397,13 +1828,14 @@ async function saveContent() {
 }
 
 async function triggerCompile(isManual = false) {
-  if (!currentProjectId || isCompiling) return;
+  if (!currentProjectId || isCompiling || isSwitchingProject) return;
   isCompiling = true;
   setCompileStatus('compiling', '编译中...');
 
   const payload = {};
-  if (currentActiveFile === 'main.tex' && editor) {
+  if (editor && currentActiveFile && isEditableFile(currentActiveFile) && !isSwitchingProject && !isSwitchingFile) {
     payload.content = editor.getValue();
+    payload.path = currentActiveFile;
   }
   try {
     const res = await fetch(`/api/projects/${currentProjectId}/compile`, {
@@ -1432,6 +1864,20 @@ async function triggerCompile(isManual = false) {
       hideErrors();
       updateCompileStatusTooltip();
       setSaveStatus('saved');
+
+      if (synctexBroadcastChannel) {
+        synctexBroadcastChannel.postMessage({
+          type: 'pdf_updated',
+          url: result.pdf_url
+        });
+      }
+      fetchProjectCitations();
+      fetchProjectLabels();
+      lastSnapshotContent = editor ? editor.getValue() : '';
+      lastSnapshotTimestamp = Date.now();
+      if (document.getElementById('view-history') && document.getElementById('view-history').classList.contains('active')) {
+        loadProjectHistory();
+      }
     } else {
       lastCompileTimestamp = Date.now();
       lastCompileDurationSec = null;
@@ -1454,9 +1900,14 @@ async function triggerCompile(isManual = false) {
 async function showPdf(url) {
   if (!url) return;
   currentPdfUrl = url;
-  pdfPlaceholder.style.display = 'none';
-  pdfContainer.style.display = 'flex';
-  document.getElementById('btn-download-pdf').href = url;
+  if (pdfPlaceholder) pdfPlaceholder.style.display = 'none';
+  if (pdfContainer) pdfContainer.style.display = 'flex';
+  const dlBtn = document.getElementById('btn-download-pdf');
+  if (dlBtn) {
+    dlBtn.href = url;
+    const pName = (currentProjectMeta && currentProjectMeta.name) ? currentProjectMeta.name : 'paper';
+    dlBtn.download = `${pName}.pdf`;
+  }
 
   if (typeof pdfjsLib === 'undefined') {
     pdfContainer.innerHTML = '<div style="color:#ef4444;padding:20px;">PDF.js 渲染引擎未就绪</div>';
@@ -1581,6 +2032,9 @@ async function renderAllPdfPages() {
 
       // Overleaf-style Double Click in PDF -> Jump to Source Line (Backward SyncTeX)
       pageWrapper.addEventListener('dblclick', (e) => {
+        if (currentViewMode === 'paper') {
+          setViewMode('split');
+        }
         const rect = pageWrapper.getBoundingClientRect();
         const clickX = e.clientX - rect.left;
         const clickY = e.clientY - rect.top;
@@ -1608,6 +2062,15 @@ async function renderAllPdfPages() {
           textDivs: []
         });
         await textLayerRender.promise;
+
+        // Mozilla PDF.js endOfContent shield against whitespace text selection jump
+        const endOfContent = document.createElement('div');
+        endOfContent.className = 'endOfContent';
+        textLayerDiv.appendChild(endOfContent);
+
+        textLayerDiv.addEventListener('mousedown', () => {
+          endOfContent.classList.add('active');
+        });
       } catch (tErr) {
         if (tErr.name !== 'RenderingCancelledException') {
           console.warn('TextLayer render warning:', tErr);
@@ -1663,6 +2126,21 @@ function initPdfControls() {
     });
   }
 
+  const btnPdfJumpToCode = document.getElementById('btn-pdf-jump-to-code');
+  if (btnPdfJumpToCode) {
+    btnPdfJumpToCode.addEventListener('click', () => {
+      if (currentViewMode === 'paper') {
+        setViewMode('split');
+      }
+      jumpFromPdfToCode();
+    });
+  }
+
+  // Deactivate any active PDF textLayer endOfContent shields on mouseup
+  window.addEventListener('mouseup', () => {
+    document.querySelectorAll('.textLayer .endOfContent.active').forEach(el => el.classList.remove('active'));
+  });
+
   // Ctrl + Wheel to zoom inside PDF
   if (pdfContainer) {
     pdfContainer.addEventListener('wheel', (e) => {
@@ -1693,6 +2171,26 @@ function initPdfControls() {
       }
     });
   }
+
+  // PDF Eye-Care Filter Selector
+  const filterSelect = document.getElementById('pdf-filter-select');
+  if (filterSelect && pdfContainer) {
+    const savedFilter = localStorage.getItem('paperleaf_pdf_filter') || 'normal';
+    filterSelect.value = savedFilter;
+    applyPdfFilter(savedFilter);
+
+    filterSelect.addEventListener('change', (e) => {
+      const selected = e.target.value;
+      applyPdfFilter(selected);
+      localStorage.setItem('paperleaf_pdf_filter', selected);
+    });
+  }
+}
+
+function applyPdfFilter(filterName) {
+  if (!pdfContainer) return;
+  pdfContainer.classList.remove('pdf-filter-normal', 'pdf-filter-dark', 'pdf-filter-green', 'pdf-filter-sepia');
+  pdfContainer.classList.add(`pdf-filter-${filterName}`);
 }
 
 let lastCompileTimestamp = null;
@@ -1844,17 +2342,30 @@ function displayErrors(errors, fullLog) {
   errors.forEach(err => {
     const item = document.createElement('div');
     item.className = 'error-item';
-    item.textContent = `[第 ${err.line} 行] ${err.message}`;
-    item.addEventListener('click', () => {
+    const fileLabel = err.file ? `${err.file}:` : '';
+    const lineNo = err.line || 1;
+    item.textContent = `[${fileLabel}${lineNo}] ${err.message}`;
+    item.title = `点击跳转至 ${err.file || '当前文件'} 第 ${lineNo} 行并高亮`;
+    item.addEventListener('click', async () => {
       const mediaWrapper = document.getElementById('media-preview-wrapper');
       const editorWrapper = document.getElementById('editor-wrapper');
       if (mediaWrapper && editorWrapper) {
         mediaWrapper.classList.add('hidden');
         editorWrapper.style.display = 'block';
       }
+      if (err.file && err.file !== currentActiveFile) {
+        await switchActiveFile(err.file);
+      }
       if (editor && editor.setCursor) {
-        editor.setCursor({ line: Math.max(0, err.line - 1), ch: 0 });
+        const lineIdx = Math.max(0, lineNo - 1);
+        editor.setCursor({ line: lineIdx, ch: 0 });
+        editor.scrollIntoView({ line: lineIdx, ch: 0 }, 140);
         editor.focus();
+
+        const lineHandle = editor.addLineClass(lineIdx, 'background', 'cm-error-active-line');
+        setTimeout(() => {
+          editor.removeLineClass(lineHandle, 'background', 'cm-error-active-line');
+        }, 2200);
       }
     });
     errorList.appendChild(item);
@@ -1996,6 +2507,17 @@ function initProjectModal() {
   const btnConfirm = document.getElementById('btn-confirm-create');
   const inputName = document.getElementById('input-project-name');
 
+  // Handle template card clicks
+  const templateCards = document.querySelectorAll('.template-card');
+  templateCards.forEach(card => {
+    card.addEventListener('click', () => {
+      templateCards.forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+      const radio = card.querySelector('input[type="radio"]');
+      if (radio) radio.checked = true;
+    });
+  });
+
   btnNew.addEventListener('click', () => {
     inputName.value = '';
     modal.classList.remove('hidden');
@@ -2008,18 +2530,19 @@ function initProjectModal() {
 
   btnConfirm.addEventListener('click', async () => {
     const name = inputName.value.trim() || '未命名论文项目';
-    const lang = document.querySelector('input[name="project-lang"]:checked').value;
+    const checkedRadio = document.querySelector('input[name="project-template"]:checked') || document.querySelector('input[name="project-lang"]:checked');
+    const templateKey = checkedRadio ? checkedRadio.value : 'chinese';
 
     try {
       const res = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, language: lang })
+        body: JSON.stringify({ name, template: templateKey, language: templateKey })
       });
       const data = await res.json();
       closeModal();
       await loadProjects();
-      selectProject(data.project.id);
+      await selectProject(data.project.id);
       triggerCompile(true);
     } catch (err) {
       alert('创建项目失败: ' + err);
@@ -2107,7 +2630,7 @@ async function uploadZipFile(file) {
     if (result.success) {
       setCompileStatus('success', 'ZIP 导入成功');
       await loadProjects();
-      selectProject(result.project.id);
+      await selectProject(result.project.id);
       triggerCompile(true);
     } else {
       setCompileStatus('error', '导入失败');
@@ -2120,18 +2643,25 @@ async function uploadZipFile(file) {
 }
 
 // --- 9. Storage / Settings Modal ---
-async function refreshSystemStorageInfo() {
+async function refreshSystemStorageInfo(includeSize = false) {
   try {
-    const res = await fetch('/api/system/info');
+    const url = includeSize ? '/api/system/info?include_size=1' : '/api/system/info';
+    const res = await fetch(url);
     const info = await res.json();
     const cacheDirEl = document.getElementById('info-cache-dir');
     if (cacheDirEl) cacheDirEl.textContent = info.cache_dir;
     const cacheSizeEl = document.getElementById('info-cache-size');
-    if (cacheSizeEl) cacheSizeEl.textContent = `${info.cache_size_mb} MB`;
+    if (cacheSizeEl) {
+      if (info.cache_size_mb !== null && info.cache_size_mb !== undefined) {
+        cacheSizeEl.textContent = `${info.cache_size_mb} MB`;
+      } else {
+        cacheSizeEl.textContent = `待计算`;
+      }
+    }
     const projectsDirEl = document.getElementById('info-projects-dir');
     if (projectsDirEl) projectsDirEl.textContent = info.projects_dir;
     const drawerProjectsDir = document.getElementById('drawer-projects-dir');
-    if (drawerProjectsDir) {
+    if (drawerProjectsDir && info.projects_dir) {
       drawerProjectsDir.textContent = info.projects_dir;
       drawerProjectsDir.title = info.projects_dir;
     }
@@ -2149,41 +2679,44 @@ function initStorageModal() {
 
   if (!modal) return;
 
-  // 1. Subnav Tab Switching (Fonts vs Storage)
+  // 1. Subnav Tab Switching (Fonts vs Storage vs History)
   const btnTabFonts = document.getElementById('btn-tab-fonts');
   const btnTabStorage = document.getElementById('btn-tab-storage');
+  const btnTabHistory = document.getElementById('btn-tab-history');
   const paneFonts = document.getElementById('settings-tab-fonts');
   const paneStorage = document.getElementById('settings-tab-storage');
+  const paneHistory = document.getElementById('settings-tab-history');
 
   const switchTab = (tab) => {
+    [btnTabFonts, btnTabStorage, btnTabHistory].forEach(b => { if (b) b.classList.remove('active'); });
+    [paneFonts, paneStorage, paneHistory].forEach(p => { if (p) { p.classList.add('hidden'); p.style.display = 'none'; } });
+
     if (tab === 'fonts') {
       if (btnTabFonts) btnTabFonts.classList.add('active');
-      if (btnTabStorage) btnTabStorage.classList.remove('active');
       if (paneFonts) {
         paneFonts.classList.remove('hidden');
         paneFonts.style.display = 'block';
       }
-      if (paneStorage) {
-        paneStorage.classList.add('hidden');
-        paneStorage.style.display = 'none';
-      }
-    } else {
-      if (btnTabFonts) btnTabFonts.classList.remove('active');
+    } else if (tab === 'storage') {
       if (btnTabStorage) btnTabStorage.classList.add('active');
-      if (paneFonts) {
-        paneFonts.classList.add('hidden');
-        paneFonts.style.display = 'none';
-      }
       if (paneStorage) {
         paneStorage.classList.remove('hidden');
         paneStorage.style.display = 'block';
       }
-      refreshSystemStorageInfo();
+      refreshSystemStorageInfo(true);
+    } else if (tab === 'history') {
+      if (btnTabHistory) btnTabHistory.classList.add('active');
+      if (paneHistory) {
+        paneHistory.classList.remove('hidden');
+        paneHistory.style.display = 'block';
+      }
+      loadHistorySettingsUI();
     }
   };
 
   if (btnTabFonts) btnTabFonts.addEventListener('click', () => switchTab('fonts'));
   if (btnTabStorage) btnTabStorage.addEventListener('click', () => switchTab('storage'));
+  if (btnTabHistory) btnTabHistory.addEventListener('click', () => switchTab('history'));
 
   // 2. Scan Local Installed Fonts
   const btnScanFonts = document.getElementById('btn-scan-fonts');
@@ -2246,22 +2779,173 @@ function initStorageModal() {
     btnScanFonts.addEventListener('click', doScanFonts);
   }
 
-  const openModal = async () => {
+  const openModal = async (initialTab = 'fonts') => {
     modal.classList.remove('hidden');
-    switchTab('fonts');
-    await refreshSystemStorageInfo();
-    if (!hasScannedFonts) {
+    switchTab(initialTab);
+    if (initialTab === 'storage') {
+      await refreshSystemStorageInfo(true);
+    }
+    if (!hasScannedFonts && initialTab === 'fonts') {
       doScanFonts();
     }
   };
+
+  window.openSettingsModal = (tab = 'fonts') => openModal(tab);
 
   const closeModal = () => {
     modal.classList.add('hidden');
   };
 
-  if (btnOpen) btnOpen.addEventListener('click', openModal);
+  if (btnOpen) btnOpen.addEventListener('click', () => openModal('fonts'));
   if (btnClose) btnClose.addEventListener('click', closeModal);
   if (btnOk) btnOk.addEventListener('click', closeModal);
+
+  // Hook button in history drawer header
+  const btnOpenClean = document.getElementById('btn-open-clean-history');
+  if (btnOpenClean) {
+    btnOpenClean.addEventListener('click', () => {
+      openModal('history');
+    });
+  }
+
+  // Hook retention policy execute button
+  const btnCleanHistory = document.getElementById('btn-execute-clean-history');
+  if (btnCleanHistory) {
+    btnCleanHistory.addEventListener('click', async () => {
+      if (!currentProjectId) {
+        alert('请先选择一个项目以执行快照清理');
+        return;
+      }
+      const selected = document.querySelector('input[name="clean-policy"]:checked');
+      const policy = selected ? selected.value : 'older_than_days';
+      const days = parseInt(document.getElementById('input-clean-days').value, 10) || 2;
+      const count = parseInt(document.getElementById('input-clean-count').value, 10) || 10;
+
+      let confirmMsg = '确定执行历史快照清理吗？';
+      if (policy === 'older_than_days') {
+        confirmMsg = `确定清理 ${days} 天以前的日常快照吗？（星标重要版本受永久保护，不会被删除）`;
+      } else if (policy === 'keep_recent_count') {
+        confirmMsg = `确定仅保留最近 ${count} 次快照记录，其余旧快照全部移除吗？（星标重要版本受永久保护，不会被删除）`;
+      } else if (policy === 'clean_all_unstarred') {
+        confirmMsg = `确定清空全部日常快照吗？（星标重要版本受永久保护，不会被删除）`;
+      } else if (policy === 'clean_everything') {
+        confirmMsg = `⚠️ 警告：该操作将彻底抹平当前项目的所有历史快照（包含星标版本），无法撤销！是否继续？`;
+      }
+
+      if (!confirm(confirmMsg)) return;
+
+      btnCleanHistory.disabled = true;
+      btnCleanHistory.textContent = '⏳ 清理中...';
+      const statusSpan = document.getElementById('clean-history-status');
+      if (statusSpan) statusSpan.textContent = '';
+
+      try {
+        const res = await fetch(`/api/projects/${currentProjectId}/history/clean`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ policy, days, count })
+        });
+        const data = await res.json();
+        if (data.success) {
+          if (statusSpan) {
+            statusSpan.textContent = `✅ 成功清理 ${data.deleted_count} 个快照，当前保留 ${data.remaining_count} 个`;
+          }
+          if (typeof loadProjectHistory === 'function') {
+            loadProjectHistory();
+          }
+        } else {
+          if (statusSpan) statusSpan.textContent = `❌ 清理失败: ${data.error || '未知错误'}`;
+        }
+      } catch (e) {
+        if (statusSpan) statusSpan.textContent = `❌ 清理异常: ${e.message}`;
+      } finally {
+        btnCleanHistory.disabled = false;
+        btnCleanHistory.textContent = '🗑️ 立即按选中策略执行清理';
+      }
+    });
+  }
+
+  // Load and populate auto-clean history settings
+  async function loadHistorySettingsUI() {
+    if (!currentProjectId) return;
+    try {
+      const res = await fetch(`/api/projects/${currentProjectId}/history/settings`);
+      const data = await res.json();
+      if (data.success && data.settings) {
+        const s = data.settings;
+        const chk = document.getElementById('check-auto-clean-enabled');
+        if (chk) chk.checked = !!s.auto_clean_enabled;
+        const modeRadios = document.querySelectorAll('input[name="auto-clean-mode"]');
+        modeRadios.forEach(r => {
+          r.checked = (r.value === s.mode);
+        });
+        const daysInput = document.getElementById('input-auto-clean-days');
+        if (daysInput && s.days) daysInput.value = s.days;
+        const countInput = document.getElementById('input-auto-clean-count');
+        if (countInput && s.count) countInput.value = s.count;
+
+        const sizeEl = document.getElementById('info-history-size');
+        if (sizeEl && data.total_size_kb !== undefined) sizeEl.textContent = `${data.total_size_kb} KB`;
+        const countEl = document.getElementById('info-history-count');
+        if (countEl && data.total_count !== undefined) countEl.textContent = data.total_count;
+      }
+    } catch (e) {
+      console.error('Failed to load history settings:', e);
+    }
+  }
+
+  // Hook save auto-clean settings button
+  const btnSaveAutoClean = document.getElementById('btn-save-auto-clean-settings');
+  if (btnSaveAutoClean) {
+    btnSaveAutoClean.addEventListener('click', async () => {
+      if (!currentProjectId) {
+        alert('请先选择一个项目以保存清理配置');
+        return;
+      }
+      const chk = document.getElementById('check-auto-clean-enabled');
+      const auto_clean_enabled = chk ? chk.checked : true;
+      const selMode = document.querySelector('input[name="auto-clean-mode"]:checked');
+      const mode = selMode ? selMode.value : 'keep_recent_count';
+      const days = parseInt(document.getElementById('input-auto-clean-days').value, 10) || 2;
+      const count = parseInt(document.getElementById('input-auto-clean-count').value, 10) || 20;
+
+      btnSaveAutoClean.disabled = true;
+      btnSaveAutoClean.textContent = '⏳ 保存中...';
+
+      try {
+        const res = await fetch(`/api/projects/${currentProjectId}/history/settings`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ auto_clean_enabled, mode, days, count })
+        });
+        const data = await res.json();
+        if (data.success) {
+          btnSaveAutoClean.textContent = '✓ 已保存';
+          if (data.total_size_kb !== undefined) {
+            const sizeEl = document.getElementById('info-history-size');
+            if (sizeEl) sizeEl.textContent = `${data.total_size_kb} KB`;
+            const countEl = document.getElementById('info-history-count');
+            if (countEl && data.total_count !== undefined) countEl.textContent = data.total_count;
+          }
+          if (typeof loadProjectHistory === 'function') {
+            loadProjectHistory();
+          }
+          setTimeout(() => {
+            btnSaveAutoClean.textContent = '💾 保存自动清理配置';
+            btnSaveAutoClean.disabled = false;
+          }, 1200);
+        } else {
+          alert('保存失败: ' + (data.error || ''));
+          btnSaveAutoClean.disabled = false;
+          btnSaveAutoClean.textContent = '💾 保存自动清理配置';
+        }
+      } catch (err) {
+        alert('保存异常: ' + err.message);
+        btnSaveAutoClean.disabled = false;
+        btnSaveAutoClean.textContent = '💾 保存自动清理配置';
+      }
+    });
+  }
 
   modal.addEventListener('click', (e) => {
     if (e.target === modal) closeModal();
@@ -2437,24 +3121,33 @@ function initExitModal() {
 function initFileTreeUI() {
   const tabFiletree = document.getElementById('tab-filetree');
   const tabProjects = document.getElementById('tab-projects');
+  const tabHistory = document.getElementById('tab-history');
   const viewFiletree = document.getElementById('view-filetree');
   const viewProjects = document.getElementById('view-projects');
+  const viewHistory = document.getElementById('view-history');
 
-  tabFiletree.addEventListener('click', () => {
-    tabFiletree.classList.add('active');
-    tabProjects.classList.remove('active');
-    viewFiletree.classList.add('active');
-    viewProjects.classList.remove('active');
-    loadFileTree();
-  });
+  const switchDrawerView = (view) => {
+    [tabFiletree, tabProjects, tabHistory].forEach(t => { if (t) t.classList.remove('active'); });
+    [viewFiletree, viewProjects, viewHistory].forEach(v => { if (v) v.classList.remove('active'); });
 
-  tabProjects.addEventListener('click', () => {
-    tabProjects.classList.add('active');
-    tabFiletree.classList.remove('active');
-    viewProjects.classList.add('active');
-    viewFiletree.classList.remove('active');
-    loadProjects();
-  });
+    if (view === 'filetree') {
+      if (tabFiletree) tabFiletree.classList.add('active');
+      if (viewFiletree) viewFiletree.classList.add('active');
+      loadFileTree();
+    } else if (view === 'projects') {
+      if (tabProjects) tabProjects.classList.add('active');
+      if (viewProjects) viewProjects.classList.add('active');
+      loadProjects();
+    } else if (view === 'history') {
+      if (tabHistory) tabHistory.classList.add('active');
+      if (viewHistory) viewHistory.classList.add('active');
+      loadProjectHistory();
+    }
+  };
+
+  if (tabFiletree) tabFiletree.addEventListener('click', () => switchDrawerView('filetree'));
+  if (tabProjects) tabProjects.addEventListener('click', () => switchDrawerView('projects'));
+  if (tabHistory) tabHistory.addEventListener('click', () => switchDrawerView('history'));
 
   // Upload file / image button
   const btnTreeUpload = document.getElementById('btn-tree-upload');
@@ -2592,7 +3285,8 @@ function initMediaToolbar() {
     btnBack.addEventListener('click', () => {
       document.getElementById('media-preview-wrapper').classList.add('hidden');
       document.getElementById('editor-wrapper').style.display = 'block';
-      switchActiveFile('main.tex');
+      const rootDoc = getActiveRootDocument();
+      switchActiveFile(rootDoc);
       if (editor && editor.refresh) editor.refresh();
     });
   }
@@ -3459,6 +4153,16 @@ async function triggerSyncTeXForward(targetLine = null) {
     const data = await res.json();
     if (data.success && data.page) {
       highlightPdfRegion(data.page, data.x, data.y, data.w, data.h);
+      if (synctexBroadcastChannel) {
+        synctexBroadcastChannel.postMessage({
+          type: 'synctex_forward',
+          page: data.page,
+          x: data.x,
+          y: data.y,
+          w: data.w,
+          h: data.h
+        });
+      }
       setCompileStatus('idle', '🎯 已精准定位至第 ' + data.page + ' 页 (源码第 ' + lineNo + ' 行)');
     } else {
       setCompileStatus('idle', '未找到对应定位点 (建议重新编译生成最新索引)');
@@ -3523,14 +4227,17 @@ async function triggerSyncTeXBackward(pageNo, ptX, ptY) {
 
   if (!currentProjectId || !editor) return;
 
+  if (currentViewMode === 'paper') {
+    setViewMode('split');
+  }
+
   try {
     const res = await fetch('/api/projects/' + currentProjectId + '/synctex/backward?page=' + pageNo + '&x=' + ptX.toFixed(1) + '&y=' + ptY.toFixed(1));
     const data = await res.json();
     if (data.success && data.line) {
       // If target file is different from currentActiveFile, switch to it
       if (data.file && data.file !== currentActiveFile) {
-        const fileItem = document.querySelector(`.tree-item[data-path="${data.file}"]`);
-        if (fileItem) fileItem.click();
+        await switchActiveFile(data.file);
       }
 
       const lineIdx = Math.max(0, data.line - 1);
@@ -3555,6 +4262,10 @@ async function triggerSyncTeXBackward(pageNo, ptX, ptY) {
 
 function jumpFromPdfToCode() {
   if (!currentProjectId || !editor || !pdfContainer) return;
+
+  if (currentViewMode === 'paper') {
+    setViewMode('split');
+  }
 
   // 1. Check if user selected text anywhere in PDF TextLayer
   const selection = window.getSelection();
@@ -3911,8 +4622,8 @@ function updateLangDropdownChecks(currentLang) {
   const itemEn = document.getElementById('item-lang-english');
   const isCn = currentLang === 'chinese';
 
-  if (checkCn) checkCn.style.display = isCn ? 'inline' : 'none';
-  if (checkEn) checkEn.style.display = isCn ? 'none' : 'inline';
+  if (checkCn) checkCn.classList.toggle('hidden', !isCn);
+  if (checkEn) checkEn.classList.toggle('hidden', isCn);
   if (itemCn) itemCn.classList.toggle('active', isCn);
   if (itemEn) itemEn.classList.toggle('active', !isCn);
 }
@@ -4048,6 +4759,602 @@ function initProjectLanguageSwitcher() {
   });
 }
 
+// --- 10.5 Popout Dual-Monitor PDF Viewer ---
+function initPopoutViewer() {
+  const btnPopout = document.getElementById('btn-popout-viewer');
+  if (btnPopout) {
+    btnPopout.addEventListener('click', () => {
+      if (!currentProjectId) {
+        alert('请先选择一个项目以在独立新视窗中打开 PDF');
+        return;
+      }
+      const pName = (currentProjectMeta && currentProjectMeta.name) ? currentProjectMeta.name : 'PDF';
+      window.open(`/viewer?project_id=${encodeURIComponent(currentProjectId)}&project_name=${encodeURIComponent(pName)}`, '_blank', 'width=980,height=920,menubar=no,toolbar=no');
+      // When opening independent popout viewer, switch main window to pure code view
+      setViewMode('code');
+    });
+  }
+}
+
+// --- 10.6 Local History Timeline & Snapshot Manager ---
+let currentProjectSnapshots = [];
+let activeDiffSnapshotId = null;
+let activeDiffHunks = [];
+let currentDiffHunkIndex = -1;
+
+function updateDiffSnapshotNavUI() {
+  const btnPrev = document.getElementById('btn-snapshot-prev');
+  const btnNext = document.getElementById('btn-snapshot-next');
+  const indexSpan = document.getElementById('diff-snapshot-index');
+
+  if (!currentProjectSnapshots || currentProjectSnapshots.length === 0) {
+    if (indexSpan) indexSpan.textContent = '版本 1 / 1';
+    if (btnPrev) btnPrev.disabled = true;
+    if (btnNext) btnNext.disabled = true;
+    return;
+  }
+
+  const total = currentProjectSnapshots.length;
+  const currentIndex = currentProjectSnapshots.findIndex(s => s.id === activeDiffSnapshotId);
+
+  if (currentIndex === -1) {
+    if (indexSpan) indexSpan.textContent = `版本 1 / ${total}`;
+    if (btnPrev) btnPrev.disabled = true;
+    if (btnNext) btnNext.disabled = true;
+    return;
+  }
+
+  if (indexSpan) {
+    indexSpan.textContent = `版本 ${currentIndex + 1} / ${total}`;
+    indexSpan.title = `当前第 ${currentIndex + 1} 个快照（共 ${total} 个）`;
+  }
+
+  // btnPrev: "◀ 上一版本" moves backward to currentIndex - 1 (e.g. 2/6 -> 1/6)
+  if (btnPrev) {
+    btnPrev.disabled = (currentIndex <= 0);
+  }
+
+  // btnNext: "下一版本 ▶" moves forward to currentIndex + 1 (e.g. 1/6 -> 2/6)
+  if (btnNext) {
+    btnNext.disabled = (currentIndex >= total - 1);
+  }
+}
+
+function switchDiffSnapshot(direction) {
+  if (!currentProjectSnapshots || currentProjectSnapshots.length <= 1) return;
+  const currentIndex = currentProjectSnapshots.findIndex(s => s.id === activeDiffSnapshotId);
+  if (currentIndex === -1) return;
+
+  // direction === -1: 上一版本 (currentIndex - 1)
+  // direction === 1:  下一版本 (currentIndex + 1)
+  const targetIndex = currentIndex + direction;
+  if (targetIndex >= 0 && targetIndex < currentProjectSnapshots.length) {
+    openDiffModal(currentProjectSnapshots[targetIndex]);
+  }
+}
+
+function updateDiffNavUI() {
+  const prevBtn = document.getElementById('btn-diff-prev');
+  const nextBtn = document.getElementById('btn-diff-next');
+  const indexSpan = document.getElementById('diff-nav-index');
+
+  const total = activeDiffHunks.length;
+  if (total === 0) {
+    if (indexSpan) indexSpan.textContent = '0 / 0';
+    if (prevBtn) prevBtn.disabled = true;
+    if (nextBtn) nextBtn.disabled = true;
+    return;
+  }
+
+  if (prevBtn) prevBtn.disabled = false;
+  if (nextBtn) nextBtn.disabled = false;
+  const currentDisplay = currentDiffHunkIndex >= 0 ? currentDiffHunkIndex + 1 : 0;
+  if (indexSpan) indexSpan.textContent = `${currentDisplay} / ${total}`;
+}
+
+function jumpToDiffHunk(index) {
+  if (!activeDiffHunks || activeDiffHunks.length === 0) return;
+  if (index < 0) index = activeDiffHunks.length - 1;
+  if (index >= activeDiffHunks.length) index = 0;
+
+  // Clear previous active markers
+  const prevActive = document.querySelectorAll('.diff-line.diff-hunk-active');
+  prevActive.forEach(el => el.classList.remove('diff-hunk-active'));
+
+  currentDiffHunkIndex = index;
+  const hunk = activeDiffHunks[currentDiffHunkIndex];
+  if (hunk && hunk.elements.length > 0) {
+    hunk.elements.forEach(el => el.classList.add('diff-hunk-active'));
+    hunk.elements[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  updateDiffNavUI();
+}
+
+function computeLineDiff(oldText, newText) {
+  const oldLines = (oldText || '').split('\n');
+  const newLines = (newText || '').split('\n');
+  const m = oldLines.length;
+  const n = newLines.length;
+
+  if (m * n > 2500000) {
+    const result = [];
+    let i = 0, j = 0;
+    while (i < m || j < n) {
+      if (i < m && j < n && oldLines[i] === newLines[j]) {
+        result.push({ type: 'unchanged', text: oldLines[i], newLine: j + 1 });
+        i++; j++;
+      } else {
+        if (i < m) {
+          result.push({ type: 'removed', text: oldLines[i], oldLine: i + 1 });
+          i++;
+        }
+        if (j < n) {
+          result.push({ type: 'added', text: newLines[j], newLine: j + 1 });
+          j++;
+        }
+      }
+    }
+    return result;
+  }
+
+  const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1));
+  for (let i = 0; i < m; i++) {
+    for (let j = 0; j < n; j++) {
+      if (oldLines[i] === newLines[j]) {
+        dp[i + 1][j + 1] = dp[i][j] + 1;
+      } else {
+        dp[i + 1][j + 1] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+  }
+
+  let i = m, j = n;
+  const result = [];
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+      result.push({ type: 'unchanged', text: oldLines[i - 1], oldLine: i, newLine: j });
+      i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      result.push({ type: 'added', text: newLines[j - 1], newLine: j });
+      j--;
+    } else if (i > 0 && (j === 0 || dp[i][j - 1] < dp[i - 1][j])) {
+      result.push({ type: 'removed', text: oldLines[i - 1], oldLine: i });
+      i--;
+    }
+  }
+  return result.reverse();
+}
+
+async function loadProjectHistory() {
+  const historyList = document.getElementById('history-snapshots-list');
+  if (!historyList || !currentProjectId) return;
+
+  historyList.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-secondary);font-size:12px;">⏳ 加载历史版本中...</div>';
+
+  try {
+    const res = await fetch(`/api/projects/${currentProjectId}/history`);
+    const data = await res.json();
+    currentProjectSnapshots = (data && Array.isArray(data.snapshots)) ? data.snapshots : [];
+    if (data.total_size_kb !== undefined) {
+      const sizeEl = document.getElementById('info-history-size');
+      if (sizeEl) sizeEl.textContent = `${data.total_size_kb} KB`;
+      const countEl = document.getElementById('info-history-count');
+      if (countEl) countEl.textContent = (data.snapshots || []).length;
+    }
+
+    if (!data.success || !Array.isArray(data.snapshots) || data.snapshots.length === 0) {
+      historyList.innerHTML = '<div style="padding:24px 12px;text-align:center;color:var(--text-secondary);font-size:12px;line-height:1.6;">暂无历史版本记录<br><small style="opacity:0.75;">点击右上角“+ 快照”或编辑保存时会自动生成</small></div>';
+      return;
+    }
+
+    historyList.innerHTML = '';
+    data.snapshots.forEach(snap => {
+      const item = document.createElement('div');
+      item.className = 'history-item';
+      item.dataset.id = snap.id;
+
+      const fileCount = Array.isArray(snap.files) ? snap.files.length : 1;
+      const comment = snap.comment || '快照版本';
+
+      // Type icon
+      let typeIcon = '📌';
+      if (snap.starred) typeIcon = '⭐';
+      else if (comment.includes('编译')) typeIcon = '⚡';
+      else if (comment.includes('自动') || comment.includes('底稿')) typeIcon = '📝';
+      else if (comment.includes('还原')) typeIcon = '↩️';
+
+      // Clean date formatting
+      const fullDateStr = snap.created_at || new Date(snap.timestamp * 1000).toLocaleString('zh-CN');
+      let displayDateStr = fullDateStr;
+      const currentYear = new Date().getFullYear().toString();
+      if (displayDateStr.startsWith(currentYear + '-')) {
+        displayDateStr = displayDateStr.slice(5); // e.g. "10-29 16:20:08"
+      }
+
+      item.innerHTML = `
+        <div class="history-item-row history-item-top">
+          <div class="history-item-title" title="${escapeHtml(comment)}">
+            <span class="history-type-icon">${typeIcon}</span>
+            <span class="history-title-text">${escapeHtml(comment)}</span>
+          </div>
+          <div class="history-item-top-actions">
+            <button class="history-star-btn ${snap.starred ? 'starred' : ''}" title="${snap.starred ? '已保护为重要里程碑（清理时免删）' : '设为重要里程碑（星标保护）'}">${snap.starred ? '⭐' : '☆'}</button>
+            <button class="history-del-btn btn-history-del" title="删除此快照">✕</button>
+          </div>
+        </div>
+        <div class="history-item-row history-item-bottom">
+          <div class="history-item-meta" title="${escapeHtml(fullDateStr)}">
+            <span class="history-time">🕒 ${escapeHtml(displayDateStr)}</span>
+            <span class="history-files">· ${fileCount} 文件</span>
+          </div>
+          <div class="history-item-btns">
+            <button class="btn btn-xs btn-subtle btn-history-diff" title="与当前源码比对差异">对比</button>
+            <button class="btn btn-xs btn-subtle btn-history-restore" title="恢复项目至此版本">恢复</button>
+          </div>
+        </div>
+      `;
+
+      // Clicking card body (except buttons) opens diff modal
+      item.addEventListener('click', (e) => {
+        if (e.target.closest('button')) return;
+        openDiffModal(snap);
+      });
+
+      // Star toggle
+      const starBtn = item.querySelector('.history-star-btn');
+      starBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        try {
+          const sRes = await fetch(`/api/projects/${currentProjectId}/history/${snap.id}/star`, { method: 'POST' });
+          const sData = await sRes.json();
+          if (sData.success) {
+            snap.starred = sData.starred;
+            starBtn.className = `history-star-btn ${snap.starred ? 'starred' : ''}`;
+            starBtn.textContent = snap.starred ? '⭐' : '☆';
+            starBtn.title = snap.starred ? '已保护为重要里程碑（清理时免删）' : '设为重要里程碑（星标保护）';
+          }
+        } catch (err) {
+          console.error('Failed to toggle star:', err);
+        }
+      });
+
+      // Diff
+      const diffBtn = item.querySelector('.btn-history-diff');
+      diffBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openDiffModal(snap);
+      });
+
+      // Restore
+      const restoreBtn = item.querySelector('.btn-history-restore');
+      restoreBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        restoreSnapshot(snap);
+      });
+
+      // Delete
+      const delBtn = item.querySelector('.history-del-btn');
+      delBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm(`确定删除快照 "${comment}" (${fullDateStr}) 吗？`)) return;
+        try {
+          const dRes = await fetch(`/api/projects/${currentProjectId}/history/${snap.id}/delete`, { method: 'POST' });
+          const dData = await dRes.json();
+          if (dData.success) {
+            loadProjectHistory();
+          }
+        } catch (err) {
+          console.error('Failed to delete snapshot:', err);
+        }
+      });
+
+      historyList.appendChild(item);
+    });
+  } catch (err) {
+    historyList.innerHTML = `<div style="padding:16px;text-align:center;color:#ef4444;font-size:12px;">加载失败: ${err.message}</div>`;
+  }
+}
+
+async function restoreSnapshot(snap) {
+  if (!currentProjectId) return;
+  const dateStr = snap.created_at || (new Date(snap.timestamp * 1000).toLocaleString());
+  if (!confirm(`确定将项目整体恢复至 [${dateStr}] 的快照版本吗？\n当前未保存的修改将自动创建一份安全快照以防万一。`)) {
+    return;
+  }
+  try {
+    const res = await fetch(`/api/projects/${currentProjectId}/history/${snap.id}/restore`, { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      alert('✅ 项目已成功恢复至指定历史版本！');
+      closeDiffModal();
+      await selectProject(currentProjectId);
+      await triggerCompile(true);
+      loadProjectHistory();
+    } else {
+      alert(`❌ 恢复失败: ${data.error || '未知错误'}`);
+    }
+  } catch (err) {
+    alert(`❌ 恢复异常: ${err.message}`);
+  }
+}
+
+async function openDiffModal(snap) {
+  const modal = document.getElementById('modal-history-diff');
+  if (!modal || !currentProjectId) return;
+
+  activeDiffSnapshotId = snap.id;
+  activeDiffHunks = [];
+  currentDiffHunkIndex = -1;
+  updateDiffNavUI();
+
+  if (!currentProjectSnapshots || currentProjectSnapshots.length === 0) {
+    try {
+      const hRes = await fetch(`/api/projects/${currentProjectId}/history`);
+      const hData = await hRes.json();
+      if (hData && Array.isArray(hData.snapshots)) {
+        currentProjectSnapshots = hData.snapshots;
+      }
+    } catch (e) {}
+  }
+  updateDiffSnapshotNavUI();
+
+  const fileToCompare = currentActiveFile || 'main.tex';
+  const fileLabel = document.getElementById('diff-file-label');
+  const timeLabel = document.getElementById('diff-time-label');
+  const statsBadge = document.getElementById('diff-stats-badge');
+  const container = document.getElementById('diff-content-scroll');
+
+  const dateStr = snap.created_at || (new Date(snap.timestamp * 1000).toLocaleString());
+  const commentStr = snap.comment ? ` (${snap.comment})` : '';
+  if (fileLabel) fileLabel.textContent = `📄 对比文件: ${fileToCompare}`;
+  if (timeLabel) {
+    timeLabel.textContent = `🕒 快照时间: ${dateStr}${commentStr}`;
+    timeLabel.title = `快照拍摄时间: ${dateStr}${commentStr}`;
+  }
+  if (statsBadge) {
+    statsBadge.className = 'diff-stats-badge';
+    statsBadge.textContent = '计算中...';
+  }
+
+  container.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);">⏳ 正在获取快照文档并计算差异...</div>';
+  modal.classList.remove('hidden');
+
+  try {
+    const res = await fetch(`/api/projects/${currentProjectId}/history/${snap.id}/content?path=${encodeURIComponent(fileToCompare)}`);
+    const data = await res.json();
+    if (!data.success || data.exists === false || data.content === undefined) {
+      if (statsBadge) {
+        statsBadge.className = 'diff-stats-badge no-changes';
+        statsBadge.textContent = '无历史备份';
+      }
+      activeDiffHunks = [];
+      currentDiffHunkIndex = -1;
+      updateDiffNavUI();
+      container.innerHTML = `<div style="padding:24px;text-align:center;color:var(--text-secondary);">该快照未包含文件 <code>${escapeHtml(fileToCompare)}</code> 的备份。</div>`;
+      return;
+    }
+
+    const currentText = editor ? editor.getValue() : '';
+    const snapText = data.content;
+
+    if (snapText === currentText) {
+      if (statsBadge) {
+        statsBadge.className = 'diff-stats-badge no-changes';
+        statsBadge.textContent = '0 处修改';
+      }
+      activeDiffHunks = [];
+      currentDiffHunkIndex = -1;
+      updateDiffNavUI();
+      container.innerHTML = `
+        <div style="padding: 40px 16px; text-align: center;">
+          <div style="font-size: 32px; margin-bottom: 12px;">✨</div>
+          <div style="font-size: 15px; font-weight: 600; color: #10b981; margin-bottom: 6px;">当前文档与该快照版本完全一致</div>
+          <div style="font-size: 13px; color: var(--text-secondary);">自此快照创建以来，该文件未发生任何内容变更 (0 处修改)</div>
+        </div>
+      `;
+      return;
+    }
+
+    const diffLines = computeLineDiff(snapText, currentText);
+    container.innerHTML = '';
+    activeDiffHunks = [];
+    currentDiffHunkIndex = -1;
+
+    let currentHunk = null;
+    let totalAdded = 0;
+    let totalRemoved = 0;
+
+    diffLines.forEach(d => {
+      const lineDiv = document.createElement('div');
+      lineDiv.className = `diff-line ${d.type}`;
+      const noSpan = document.createElement('span');
+      noSpan.className = 'diff-line-no';
+      noSpan.textContent = d.type === 'added' ? `+${d.newLine}` : (d.type === 'removed' ? `-${d.oldLine}` : `${d.newLine}`);
+      const textSpan = document.createElement('span');
+      textSpan.className = 'diff-line-text';
+      textSpan.textContent = (d.type === 'added' ? '+ ' : (d.type === 'removed' ? '- ' : '  ')) + d.text;
+      lineDiv.appendChild(noSpan);
+      lineDiv.appendChild(textSpan);
+      container.appendChild(lineDiv);
+
+      if (d.type === 'added') totalAdded++;
+      if (d.type === 'removed') totalRemoved++;
+
+      if (d.type === 'added' || d.type === 'removed') {
+        if (!currentHunk) {
+          currentHunk = { elements: [] };
+          activeDiffHunks.push(currentHunk);
+        }
+        currentHunk.elements.push(lineDiv);
+        const thisHunkIdx = activeDiffHunks.length - 1;
+        lineDiv.style.cursor = 'pointer';
+        lineDiv.title = '点击聚焦此修改处';
+        lineDiv.addEventListener('click', () => {
+          jumpToDiffHunk(thisHunkIdx);
+        });
+      } else {
+        currentHunk = null;
+      }
+    });
+
+    if (statsBadge) {
+      if (activeDiffHunks.length === 0) {
+        statsBadge.className = 'diff-stats-badge no-changes';
+        statsBadge.textContent = '0 处修改';
+      } else {
+        statsBadge.className = 'diff-stats-badge';
+        statsBadge.textContent = `${activeDiffHunks.length} 处修改 (+${totalAdded} / -${totalRemoved})`;
+      }
+    }
+
+    if (activeDiffHunks.length > 0) {
+      jumpToDiffHunk(0);
+    } else {
+      updateDiffNavUI();
+    }
+  } catch (err) {
+    if (statsBadge) {
+      statsBadge.className = 'diff-stats-badge';
+      statsBadge.textContent = '计算失败';
+    }
+    container.innerHTML = `<div style="padding:24px;text-align:center;color:#ef4444;">差异计算异常: ${err.message}</div>`;
+  }
+}
+
+function closeDiffModal() {
+  const modal = document.getElementById('modal-history-diff');
+  if (modal) modal.classList.add('hidden');
+  activeDiffSnapshotId = null;
+  activeDiffHunks = [];
+  currentDiffHunkIndex = -1;
+  const prevActive = document.querySelectorAll('.diff-line.diff-hunk-active');
+  prevActive.forEach(el => el.classList.remove('diff-hunk-active'));
+  updateDiffNavUI();
+  updateDiffSnapshotNavUI();
+}
+
+function initHistoryUI() {
+  // Top bar history button (Overleaf-style)
+  const btnTopHistory = document.getElementById('btn-top-history');
+  if (btnTopHistory) {
+    btnTopHistory.addEventListener('click', () => {
+      const isCollapsed = document.body.classList.contains('drawer-collapsed');
+      const historyTab = document.getElementById('tab-history');
+      const isHistoryActive = historyTab && historyTab.classList.contains('active');
+
+      if (isCollapsed) {
+        document.body.classList.remove('drawer-collapsed');
+        if (historyTab) historyTab.click();
+      } else if (isHistoryActive) {
+        const filetreeTab = document.getElementById('tab-filetree');
+        if (filetreeTab) filetreeTab.click();
+      } else {
+        if (historyTab) historyTab.click();
+      }
+      applySplitRatio();
+    });
+  }
+
+  // Manual snapshot button in history drawer header
+  const btnCreate = document.getElementById('btn-create-snapshot');
+  if (btnCreate) {
+    btnCreate.addEventListener('click', async () => {
+      if (!currentProjectId) {
+        alert('请先选择一个项目');
+        return;
+      }
+      const comment = prompt('请输入快照备注（例如：修改完成引言与算法）：', '手动里程碑');
+      if (comment === null) return;
+      try {
+        const res = await fetch(`/api/projects/${currentProjectId}/history/snapshot`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ comment: comment.trim() || '手动保存快照', starred: false })
+        });
+        const data = await res.json();
+        if (data.success) {
+          loadProjectHistory();
+        } else {
+          alert('创建快照失败: ' + (data.error || ''));
+        }
+      } catch (err) {
+        alert('创建快照异常: ' + err.message);
+      }
+    });
+  }
+
+  // Diff modal close buttons
+  const btnCloseDiff = document.getElementById('btn-close-diff');
+  const btnCancelDiff = document.getElementById('btn-cancel-diff');
+  if (btnCloseDiff) btnCloseDiff.addEventListener('click', closeDiffModal);
+  if (btnCancelDiff) btnCancelDiff.addEventListener('click', closeDiffModal);
+
+  // Snapshot version navigation buttons (Left / Right)
+  const btnSnapshotPrev = document.getElementById('btn-snapshot-prev');
+  const btnSnapshotNext = document.getElementById('btn-snapshot-next');
+  if (btnSnapshotPrev) {
+    btnSnapshotPrev.addEventListener('click', () => {
+      switchDiffSnapshot(-1); // Older version
+    });
+  }
+  if (btnSnapshotNext) {
+    btnSnapshotNext.addEventListener('click', () => {
+      switchDiffSnapshot(1); // Newer version
+    });
+  }
+
+  // Diff hunk navigation buttons (Up / Down)
+  const btnDiffPrev = document.getElementById('btn-diff-prev');
+  const btnDiffNext = document.getElementById('btn-diff-next');
+  if (btnDiffPrev) {
+    btnDiffPrev.addEventListener('click', () => {
+      jumpToDiffHunk(currentDiffHunkIndex - 1);
+    });
+  }
+  if (btnDiffNext) {
+    btnDiffNext.addEventListener('click', () => {
+      jumpToDiffHunk(currentDiffHunkIndex + 1);
+    });
+  }
+
+  // Keyboard navigation when diff modal is open
+  window.addEventListener('keydown', (e) => {
+    const diffModal = document.getElementById('modal-history-diff');
+    if (!diffModal || diffModal.classList.contains('hidden')) return;
+
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
+      return;
+    }
+
+    if (e.key === 'ArrowLeft' || e.key === '[') {
+      e.preventDefault();
+      switchDiffSnapshot(-1);
+    } else if (e.key === 'ArrowRight' || e.key === ']') {
+      e.preventDefault();
+      switchDiffSnapshot(1);
+    } else if (e.key === 'ArrowDown' || e.key === 'j' || e.key === 'n' || e.key === 'N') {
+      e.preventDefault();
+      jumpToDiffHunk(currentDiffHunkIndex + 1);
+    } else if (e.key === 'ArrowUp' || e.key === 'k' || e.key === 'p' || e.key === 'P') {
+      e.preventDefault();
+      jumpToDiffHunk(currentDiffHunkIndex - 1);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeDiffModal();
+    }
+  });
+
+  // Restore button in diff modal footer
+  const btnRestoreDiff = document.getElementById('btn-restore-diff-snapshot');
+  if (btnRestoreDiff) {
+    btnRestoreDiff.addEventListener('click', () => {
+      if (!activeDiffSnapshotId) return;
+      restoreSnapshot({ id: activeDiffSnapshotId });
+    });
+  }
+}
+
 // --- 11. Event Bindings ---
 window.addEventListener('DOMContentLoaded', () => {
   initTheme();
@@ -4073,6 +5380,8 @@ window.addEventListener('DOMContentLoaded', () => {
   initExitModal();
   initZipFeatures();
   initFileTreeUI();
+  initPopoutViewer();
+  initHistoryUI();
   startHeartbeat();
 
   // --- Responsive Drawer Snap & Window Resize Handling ---
@@ -4260,7 +5569,11 @@ window.addEventListener('DOMContentLoaded', () => {
   // Initialize media preview interactions (pan/zoom) and tab bar
   initMediaPreviewInteractions();
 
-  // Load projects & system info
+  // Load projects immediately
   loadProjects();
-  refreshSystemStorageInfo();
+
+  // Defer drawer path update to idle so startup render is completely unblocked
+  setTimeout(() => {
+    refreshSystemStorageInfo(false);
+  }, 500);
 });

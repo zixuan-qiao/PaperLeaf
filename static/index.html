@@ -10,22 +10,22 @@
   <link rel="apple-touch-icon" href="/static/icon-192.png">
   <link rel="manifest" href="/static/manifest.json">
   <meta name="theme-color" content="#1e293b">
-  <link rel="stylesheet" href="/static/style.css?v=4.2">
+  <link rel="stylesheet" href="/static/style.css?v=5.4">
   <!-- Local Zero-Dependency CodeMirror with LaTeX Autocomplete -->
   <link rel="stylesheet" href="/static/vendor/codemirror/codemirror.min.css">
   <link rel="stylesheet" href="/static/vendor/codemirror/eclipse.min.css">
   <link rel="stylesheet" href="/static/vendor/codemirror/show-hint.min.css">
-  <script src="/static/vendor/codemirror/codemirror.min.js" charset="UTF-8"></script>
-  <script src="/static/vendor/codemirror/stex.min.js" charset="UTF-8"></script>
-  <script src="/static/vendor/codemirror/closebrackets.min.js" charset="UTF-8"></script>
-  <script src="/static/vendor/codemirror/matchbrackets.min.js" charset="UTF-8"></script>
-  <script src="/static/vendor/codemirror/show-hint.min.js" charset="UTF-8"></script>
-  <script src="/static/vendor/codemirror/anyword-hint.min.js" charset="UTF-8"></script>
+  <script defer src="/static/vendor/codemirror/codemirror.min.js" charset="UTF-8"></script>
+  <script defer src="/static/vendor/codemirror/stex.min.js" charset="UTF-8"></script>
+  <script defer src="/static/vendor/codemirror/closebrackets.min.js" charset="UTF-8"></script>
+  <script defer src="/static/vendor/codemirror/matchbrackets.min.js" charset="UTF-8"></script>
+  <script defer src="/static/vendor/codemirror/show-hint.min.js" charset="UTF-8"></script>
+  <script defer src="/static/vendor/codemirror/anyword-hint.min.js" charset="UTF-8"></script>
   <!-- Local Zero-Dependency PDF.js Engine -->
-  <script src="/static/vendor/pdfjs/pdf.min.js" charset="UTF-8"></script>
+  <script defer src="/static/vendor/pdfjs/pdf.min.js" charset="UTF-8"></script>
   <!-- Local Zero-Dependency KaTeX Formula Engine -->
   <link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
-  <script src="/static/vendor/katex/katex.min.js" charset="UTF-8"></script>
+  <script defer src="/static/vendor/katex/katex.min.js" charset="UTF-8"></script>
 </head>
 <body>
   <div id="app-container">
@@ -52,7 +52,7 @@
             <div class="lang-menu-item" id="item-lang-english" data-lang="english">
               <span>🇬🇧</span>
               <span>英文学术 (Standard)</span>
-              <span class="lang-menu-item-check" id="check-english" style="display:none;">✓</span>
+              <span class="lang-menu-item-check hidden" id="check-english">✓</span>
             </div>
           </div>
         </div>
@@ -91,6 +91,11 @@
 
         <div class="divider-vertical"></div>
 
+        <button id="btn-top-history" class="btn btn-subtle" title="查看历史版本时光机与编辑轨迹 (History)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span class="btn-label-text">历史记录</span>
+        </button>
+
         <button id="btn-export-zip" class="btn btn-subtle" title="将当前项目完整打包为 ZIP 压缩包下载">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
           <span class="btn-label-text">导出 ZIP</span>
@@ -123,15 +128,19 @@
     <div id="main-workspace">
       <!-- 1. Left Drawer: Projects & File Tree (Resizable) -->
       <aside id="drawer" class="drawer">
-        <!-- Top Drawer Tab Switcher (Projects on LEFT, File Tree on RIGHT) -->
+        <!-- Top Drawer Tab Switcher (Projects, File Tree, History) -->
         <div class="drawer-tabs">
-          <button id="tab-projects" class="drawer-tab">
+          <button id="tab-projects" class="drawer-tab" title="查看所有项目">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-            <span>项目列表</span>
+            <span>项目</span>
           </button>
-          <button id="tab-filetree" class="drawer-tab active">
+          <button id="tab-filetree" class="drawer-tab active" title="当前项目文件目录">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-            <span>文件树 (Files)</span>
+            <span>文件</span>
+          </button>
+          <button id="tab-history" class="drawer-tab" title="版本时光机与历史快照">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            <span>历史</span>
           </button>
         </div>
 
@@ -155,7 +164,7 @@
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
                 </button>
               </div>
-              <input type="file" id="input-tree-upload" multiple style="display: none;">
+              <input type="file" id="input-tree-upload" multiple class="hidden">
             </div>
             <div id="file-tree-list" class="file-tree-list">
               <!-- Populated dynamically via JS -->
@@ -185,13 +194,27 @@
         <div id="view-projects" class="drawer-view">
           <div class="drawer-header">
             <h3>所有项目</h3>
-            <div style="display: flex; gap: 4px;">
+            <div class="d-flex gap-xs">
               <button id="btn-import-zip" class="btn btn-sm btn-subtle" title="上传并解压 ZIP 压缩包">⬆ 导入</button>
               <button id="btn-new-project" class="btn btn-sm btn-primary" title="新建项目">+ 新建</button>
             </div>
-            <input type="file" id="input-zip-file" accept=".zip" style="display: none;">
+            <input type="file" id="input-zip-file" accept=".zip" class="hidden">
           </div>
           <div id="projects-list" class="projects-list">
+            <!-- Populated dynamically via JS -->
+          </div>
+        </div>
+
+        <!-- View C: Project History Timeline -->
+        <div id="view-history" class="drawer-view">
+          <div class="drawer-header">
+            <h3>🕒 版本时光机</h3>
+            <div class="d-flex gap-xs">
+              <button id="btn-create-snapshot" class="btn btn-sm btn-primary" title="拍摄当前代码快照">+ 快照</button>
+              <button id="btn-open-clean-history" class="btn btn-sm btn-subtle" title="历史快照清理策略">⚙️ 清理</button>
+            </div>
+          </div>
+          <div id="history-snapshots-list" class="history-list">
             <!-- Populated dynamically via JS -->
           </div>
         </div>
@@ -212,7 +235,7 @@
               <!-- Dynamically populated Overleaf-style tabs -->
             </div>
           </div>
-          <div class="file-name" id="current-editor-filename" style="display: none;">📄 main.tex</div>
+          <div class="file-name hidden" id="current-editor-filename">📄 main.tex</div>
           <div class="editor-tools" id="editor-tools">
             <button id="btn-open-search" class="tool-btn" title="查找与替换 (Ctrl+F / Ctrl+H)">🔍 查找</button>
             <button id="btn-word-count" class="tool-btn" title="学术元素与字数统计">📊 统计</button>
@@ -301,7 +324,7 @@
             </div>
             <div id="media-zoom-controls" class="media-zoom-controls media-toolbar-center">
               <button id="btn-media-zoom-out" class="tool-btn-icon" title="缩小图像 (Ctrl + 滚轮向下)">−</button>
-              <span id="media-zoom-text" class="font-size-label" style="min-width: 44px; text-align: center;">100%</span>
+              <span id="media-zoom-text" class="font-size-label media-zoom-label">100%</span>
               <button id="btn-media-zoom-in" class="tool-btn-icon" title="放大图像 (Ctrl + 滚轮向上)">+</button>
               <button id="btn-media-fit-width" class="tool-btn" title="适应窗口宽度 / 居中显示">↔ 适应</button>
             </div>
@@ -354,6 +377,16 @@
               <button id="btn-pdf-fit-width" class="tool-btn" title="适应窗口宽度">↔ 适应</button>
             </div>
             <span id="pdf-page-indicator" class="pdf-page-indicator">第 1 / 1 页</span>
+            <div class="pdf-filter-wrapper" title="PDF 护眼阅读色调切换">
+              <select id="pdf-filter-select" class="pdf-filter-select">
+                <option value="normal">☀️ 默认原色</option>
+                <option value="dark">🌙 极夜深色</option>
+                <option value="green">🍵 护眼豆沙绿</option>
+                <option value="sepia">📜 羊皮纸暖黄</option>
+              </select>
+            </div>
+            <button id="btn-pdf-jump-to-code" class="btn btn-sm btn-primary mode-paper-only-btn" title="从 PDF 当前位置跳回代码源码并切回双栏分屏模式">👈 定位至代码</button>
+            <button id="btn-popout-viewer" class="btn btn-sm btn-subtle" title="在独立窗口中打开 PDF（完美支持双显示器联动）">⧉ 独立视窗</button>
             <button id="btn-refresh-pdf" class="btn btn-sm btn-subtle" title="重新渲染PDF">🔄 刷新</button>
             <a id="btn-download-pdf" class="btn btn-sm btn-subtle" href="#" target="_blank" download="paper.pdf" title="下载到本地">⬇ 下载</a>
           </div>
@@ -370,11 +403,11 @@
     </div>
   </div>
 
-  <!-- New Project Modal -->
+  <!-- New Project Modal (Academic Templates Gallery) -->
   <div id="modal-new-project" class="modal-overlay hidden">
-    <div class="modal-card">
+    <div class="modal-card modal-template-card">
       <div class="modal-header">
-        <h3>新建论文项目</h3>
+        <h3>✨ 新建学术论文项目</h3>
         <button class="modal-close" id="btn-close-modal">✕</button>
       </div>
       <div class="modal-body">
@@ -383,21 +416,69 @@
           <input type="text" id="input-project-name" placeholder="例如：MyResearchPaper_2026" autofocus>
         </div>
         <div class="form-group">
-          <label>正文语言与模板预设</label>
-          <div class="radio-card-group">
-            <label class="radio-card">
-              <input type="radio" name="project-lang" value="chinese" checked>
-              <div class="card-content">
-                <span class="card-title">🇨🇳 中文论文 (CTeX)</span>
-                <span class="card-desc">内置 ctexart，自动配置中文字体与 UTF-8，写中文无乱码报错。</span>
+          <div class="template-header-row">
+            <label>精选学术会议与期刊模板库</label>
+            <span class="template-sub-tip">💡 Tectonic 原生按需自动下载宏包，开箱即用</span>
+          </div>
+          <div id="template-card-grid" class="template-card-grid">
+            <label class="template-card selected" data-template="chinese">
+              <input type="radio" name="project-template" value="chinese" checked>
+              <div class="tcard-top">
+                <span class="tcard-icon">🇨🇳</span>
+                <span class="tcard-title">中文学术论文</span>
+                <span class="tcard-badge badge-cn">CTeX</span>
               </div>
+              <p class="tcard-desc">基于 ctexart 的标准中文学术排版模板，原生支持中文与数学公式排版。</p>
             </label>
-            <label class="radio-card">
-              <input type="radio" name="project-lang" value="english">
-              <div class="card-content">
-                <span class="card-title">🇬🇧 英文论文 (Standard)</span>
-                <span class="card-desc">标准 article 模板，适合投递国外期刊、英文会议。</span>
+
+            <label class="template-card" data-template="english">
+              <input type="radio" name="project-template" value="english">
+              <div class="tcard-top">
+                <span class="tcard-icon">🇬🇧</span>
+                <span class="tcard-title">英文学术论文</span>
+                <span class="tcard-badge badge-en">Article</span>
               </div>
+              <p class="tcard-desc">标准英文单栏学术手稿模板，适合国际期刊、会议常规学术手稿初稿。</p>
+            </label>
+
+            <label class="template-card" data-template="ieee">
+              <input type="radio" name="project-template" value="ieee">
+              <div class="tcard-top">
+                <span class="tcard-icon">⚡</span>
+                <span class="tcard-title">IEEE 会议论文</span>
+                <span class="tcard-badge badge-top">IEEEtran</span>
+              </div>
+              <p class="tcard-desc">计算机与电气领域顶会标配双栏模板，内置作者信息栏、公式与关键词规范。</p>
+            </label>
+
+            <label class="template-card" data-template="acm">
+              <input type="radio" name="project-template" value="acm">
+              <div class="tcard-top">
+                <span class="tcard-icon">🏛️</span>
+                <span class="tcard-title">ACM 学术会议</span>
+                <span class="tcard-badge badge-top">acmart</span>
+              </div>
+              <p class="tcard-desc">ACM SIGCONF 官方双栏标准会议模板，适合 SIGMOD、KDD、CHI 等顶会。</p>
+            </label>
+
+            <label class="template-card" data-template="beamer">
+              <input type="radio" name="project-template" value="beamer">
+              <div class="tcard-top">
+                <span class="tcard-icon">📊</span>
+                <span class="tcard-title">学术汇报幻灯片</span>
+                <span class="tcard-badge badge-talk">Beamer 16:9</span>
+              </div>
+              <p class="tcard-desc">16:9 现代宽屏学术答辩/组会汇报 PPT 模板，预置精致主题配色与定理卡片。</p>
+            </label>
+
+            <label class="template-card" data-template="thesis">
+              <input type="radio" name="project-template" value="thesis">
+              <div class="tcard-top">
+                <span class="tcard-icon">🎓</span>
+                <span class="tcard-title">毕业设计学位论文</span>
+                <span class="tcard-badge badge-cn">Thesis</span>
+              </div>
+              <p class="tcard-desc">本硕博毕业设计标准大纲结构，包含封面、中英文摘要、目录、正文与致谢。</p>
             </label>
           </div>
         </div>
@@ -418,6 +499,7 @@
           <div class="modal-subnav-tabs">
             <button class="modal-subnav-btn active" id="btn-tab-fonts" data-target="settings-tab-fonts">🔤 字体管理与速查</button>
             <button class="modal-subnav-btn" id="btn-tab-storage" data-target="settings-tab-storage">📁 本地存储与环境</button>
+            <button class="modal-subnav-btn" id="btn-tab-history" data-target="settings-tab-history">🕒 历史快照与清理策略</button>
           </div>
         </div>
         <button class="modal-close" id="btn-close-storage">✕</button>
@@ -449,7 +531,7 @@
             </div>
 
             <!-- Scanned system fonts container -->
-            <div id="scanned-fonts-wrapper" class="scanned-fonts-wrapper hidden" style="display: none;">
+            <div id="scanned-fonts-wrapper" class="scanned-fonts-wrapper hidden">
               <div class="scanned-fonts-header">
                 <span>本机已检测到 <strong id="scanned-fonts-count" class="highlight-blue">0</strong> 款中文字体（点击字体名即可复制）：</span>
               </div>
@@ -460,25 +542,25 @@
           </div>
 
           <!-- 2. Overleaf Font Clarification Tip -->
-          <div class="storage-tip" style="margin-top: 14px; background-color: #f0fdf4; border-left-color: #10b981; color: #065f46;">
+          <div class="storage-tip tip-success mt-md">
             💡 <strong>为什么默认是宋体？（Overleaf 官方规范说明）</strong><br>
-            <span style="color: #047857; font-size: 12px; line-height: 1.7; display: block; margin-top: 4px;">
+            <span class="tip-desc-success">
               • <strong>正统学术规范</strong>：Overleaf 官方在编译中文 <code>ctexart</code> 时的官方默认字体即为 <strong>FandolSong（Fandol 宋体/衬线体）</strong>，符合学术期刊与国标规范；<br>
               • <strong>想要现代清爽无衬线黑体？</strong>：若您偏好<strong>粗细均匀、无三角衬线、科技感强</strong>的现代风格，点击下方任意方案的 <strong>“✍️ 一键应用到文档”</strong>，系统将自动更新导言区并秒级重新编译！
             </span>
           </div>
 
           <!-- 3. Custom Font Usage Guide (Operation Manual) -->
-          <div class="storage-tip" style="margin-top: 10px; background-color: #f8fafc; border-left-color: #3b82f6; color: #1e293b;">
+          <div class="storage-tip tip-info mt-sm">
             💡 <strong>如何使用自己下载的第三方字体？（操作指引）</strong><br>
-            <span style="color: #475569; font-size: 12px; line-height: 1.7; display: block; margin-top: 4px;">
+            <span class="tip-desc-info">
               ① 将下载好的 <code>.ttf</code> 或 <code>.otf</code> 字体文件直接复制到当前项目的 <code>fonts/</code> 文件夹中；<br>
               ② 在 LaTeX 主文档导言区加入：<code>\setCJKmainfont{字体文件名.otf}[Path=fonts/]</code> 即可免安装免配置直接调用！
             </span>
           </div>
 
           <!-- 4. LaTeX Font Code Snippets (Quick Cheat Sheet) -->
-          <div class="font-section-card" style="margin-top: 14px;">
+          <div class="font-section-card mt-md">
             <div class="font-section-header">
               <span class="font-section-title">📝 常用字体排版方案（点击“一键应用”即可自动注入导言区并重新编译）</span>
             </div>
@@ -565,7 +647,7 @@
         <!-- Pane 2: Storage & Environment -->
         <div id="settings-tab-storage" class="settings-tab-pane hidden">
           <!-- 1. Local Storage & Cache Card -->
-          <div class="font-section-card" style="margin-bottom: 12px;">
+          <div class="font-section-card mb-sm">
             <div class="font-section-header">
               <span class="font-section-title">📁 本地数据与宏包缓存</span>
               <span class="font-badge badge-primary">完全便携目录</span>
@@ -578,14 +660,14 @@
               <strong>当前已缓存宏包体积：</strong>
               <span id="info-cache-size" class="highlight-green">计算中...</span>
             </div>
-            <div class="storage-info-item" style="margin-bottom: 0;">
+            <div class="storage-info-item mb-0">
               <strong>项目源码保存目录：</strong>
               <code id="info-projects-dir">data\projects</code>
             </div>
           </div>
 
           <!-- 2. Engine & Runtime Card -->
-          <div class="font-section-card" style="margin-bottom: 12px;">
+          <div class="font-section-card mb-sm">
             <div class="font-section-header">
               <span class="font-section-title">⚙️ 编译核心与运行模式</span>
               <span class="font-badge badge-success">XeTeX Unicode 引擎</span>
@@ -594,20 +676,117 @@
               <strong>本地编译器执行文件：</strong>
               <code id="info-tectonic-path">bin\tectonic.exe (XeTeX Unicode)</code>
             </div>
-            <div class="storage-info-item" style="margin-bottom: 0;">
+            <div class="storage-info-item mb-0">
               <strong>软件运行架构：</strong>
-              <code style="color: #10b981; font-weight: 500;">✓ 免安装独立便携版 · 零系统注册表污染 · 不依赖任何外部大型发行版</code>
+              <code class="code-badge-success">✓ 免安装独立便携版 · 零系统注册表污染 · 不依赖任何外部大型发行版</code>
             </div>
           </div>
 
           <!-- 3. Cache Principles & Tips -->
-          <div class="storage-tip" style="margin-top: 12px;">
+          <div class="storage-tip mt-sm">
             💡 <strong>按需下载原则</strong>：编写 LaTeX 时只在首次引入新包时联网下载并永久缓存至本地目录，后续永远秒开离线复用。
+          </div>
+        </div>
+
+        <!-- Pane 3: History Snapshots & Retention Policy -->
+        <div id="settings-tab-history" class="settings-tab-pane hidden">
+          <!-- 1. Star Protection Announcement -->
+          <div class="storage-tip tip-success mb-sm">
+            ⭐ <strong>重要版本（星标里程碑）防误删保护机制说明</strong>：<br>
+            <span class="tip-desc-success">
+              • <strong>如何保护关键论文节点</strong>：在左侧“🕒 历史”时间线中，点击任意版本旁的 ⭐️ 星标，即可将其升级为<strong>“受保护里程碑”</strong>；<br>
+              • <strong>安全保障</strong>：无论开启“后台自动清理”还是“手动一键清理”，<strong>所有星标重要版本均享有永久防误删保护</strong>，绝不会被任何清理规则抹去！
+            </span>
+          </div>
+
+          <!-- 2. Auto Cleanup Policy Card -->
+          <div class="font-section-card mb-sm">
+            <div class="font-section-header">
+              <span class="font-section-title">🤖 后台自动淘汰与清理策略 (推荐开启)</span>
+              <span class="font-badge badge-success">智能后台维护 · 防止无限堆叠</span>
+            </div>
+
+            <div style="padding: 6px 0 10px 0; border-bottom: 1px solid var(--border-color); margin-bottom: 10px;">
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-primary);">
+                <input type="checkbox" id="check-auto-clean-enabled" checked style="width: 16px; height: 16px; cursor: pointer;">
+                <span>启用后台自动清理保护 (在编辑保存或编译时静默淘汰过期日常快照)</span>
+              </label>
+            </div>
+
+            <div class="radio-card-list">
+              <label class="radio-card">
+                <input type="radio" name="auto-clean-mode" value="older_than_days">
+                <div class="radio-card-content">
+                  <span>按天数自动清理：自动淘汰超过 <input type="number" id="input-auto-clean-days" class="inline-number-input" value="2" min="1" max="365"> 天以前的日常快照</span>
+                  <small>系统在后台静默将 2 天前的旧编辑底稿和旧快照自动清理，保留近期创作轨迹。</small>
+                </div>
+              </label>
+
+              <label class="radio-card">
+                <input type="radio" name="auto-clean-mode" value="keep_recent_count" checked>
+                <div class="radio-card-content">
+                  <span>按版本数自动清理：每个项目最多仅保留最近 <input type="number" id="input-auto-clean-count" class="inline-number-input" value="20" min="5" max="500"> 个快照</span>
+                  <small>无论写多久，最多滚动保留最新的 20 个版本，超出数量的最早记录自动淘汰，磁盘永远保持极度轻爽。</small>
+                </div>
+              </label>
+            </div>
+
+            <div style="margin-top: 10px; padding: 8px 12px; background: var(--bg-primary); border-radius: 6px; font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; justify-content: space-between;">
+              <span>📊 当前项目快照占用：已存储 <strong id="info-history-count" style="color: var(--accent-color);">0</strong> 个历史版本，合计占用磁盘约 <strong id="info-history-size" style="color: #10b981;">0 KB</strong></span>
+              <button id="btn-save-auto-clean-settings" class="btn btn-xs btn-primary">💾 保存自动清理配置</button>
+            </div>
+          </div>
+
+          <!-- 3. Manual Cleanup Policy Card -->
+          <div class="font-section-card mb-sm">
+            <div class="font-section-header">
+              <span class="font-section-title">🗑️ 手动一键即时清理</span>
+              <span class="font-badge badge-primary">支持自定义天数 / 次数</span>
+            </div>
+
+            <div class="radio-card-list">
+              <label class="radio-card">
+                <input type="radio" name="clean-policy" value="older_than_days" checked>
+                <div class="radio-card-content">
+                  <span>立即清理 <input type="number" id="input-clean-days" class="inline-number-input" value="2" min="1" max="365"> 天以前的旧快照</span>
+                  <small>输入框数值可任意修改，立即清理指定天数之前的日常记录。</small>
+                </div>
+              </label>
+
+              <label class="radio-card">
+                <input type="radio" name="clean-policy" value="keep_recent_count">
+                <div class="radio-card-content">
+                  <span>立即保留最近 <input type="number" id="input-clean-count" class="inline-number-input" value="10" min="1" max="1000"> 次记录，其余旧记录全部移除</span>
+                  <small>输入框数值可任意修改，立即裁剪快照列表至指定条数。</small>
+                </div>
+              </label>
+
+              <label class="radio-card">
+                <input type="radio" name="clean-policy" value="clean_all_unstarred">
+                <div class="radio-card-content">
+                  <span>清空全部日常快照 (⭐️ 星标/里程碑版本受保护，不会被清理)</span>
+                  <small>仅抹平无星标记录，一键释放磁盘，所有重要标记版本完好保留。</small>
+                </div>
+              </label>
+
+              <label class="radio-card">
+                <input type="radio" name="clean-policy" value="clean_everything">
+                <div class="radio-card-content">
+                  <span style="color:#ef4444;">彻底抹平当前项目所有历史记录 (包含星标版本)</span>
+                  <small>彻底抹平当前项目的全部历史快照，回到零快照初始状态。</small>
+                </div>
+              </label>
+            </div>
+
+            <div style="margin-top: 14px; display: flex; align-items: center; justify-content: space-between;">
+              <button id="btn-execute-clean-history" class="btn btn-danger">🗑️ 立即按选中策略执行手动清理</button>
+              <span id="clean-history-status" style="font-size: 12px; color: #10b981;"></span>
+            </div>
           </div>
         </div>
       </div>
       <div class="modal-footer">
-        <span style="font-size: 12px; color: #64748b; margin-right: auto;">💡 快捷键：按 <strong>F2</strong> 或 <strong>Esc</strong> 可快速打开/关闭此面板</span>
+        <span class="settings-footer-tip">💡 快捷键：按 <strong>F2</strong> 或 <strong>Esc</strong> 可快速打开/关闭此面板</span>
         <button class="btn btn-primary" id="btn-ok-storage">我知道了</button>
       </div>
     </div>
@@ -621,10 +800,10 @@
         <button class="modal-close" id="btn-close-exit">✕</button>
       </div>
       <div class="modal-body">
-        <p style="font-size: 14px; color: #334155; margin-bottom: 12px;">
+        <p class="confirm-dialog-msg">
           所有正在编辑的内容均已<strong>自动实时保存至本地项目目录</strong>。
         </p>
-        <div class="storage-tip" style="background-color: #f8fafc; border-left-color: #10b981; color: #047857;">
+        <div class="storage-tip tip-success">
           ✓ 安全提示：确认退出后将干净退出所有后台服务与窗口，释放内存。
         </div>
       </div>
@@ -669,7 +848,7 @@
             <div class="stat-label">源码有效行 (Lines)</div>
           </div>
         </div>
-        <div class="storage-tip" style="margin-top: 14px;">
+        <div class="storage-tip mt-md">
           💡 <strong>学术统计原则</strong>：已自动剥离 LaTeX 编译命令、标签定义与 `%` 注释，仅计算真实学术正文与公式。
         </div>
       </div>
@@ -716,16 +895,16 @@
 
   <!-- Shortcuts Cheat Sheet Modal -->
   <div id="modal-shortcuts" class="modal-overlay hidden">
-    <div class="modal-card" style="max-width: 620px;">
+    <div class="modal-card modal-card-md">
       <div class="modal-header">
         <h3>⌨ 键盘快捷键与高效排版指南</h3>
         <button class="modal-close" id="btn-close-shortcuts">✕</button>
       </div>
-      <div class="modal-body" style="padding: 12px 20px 20px;">
+      <div class="modal-body modal-body-compact">
         <table class="shortcuts-table">
           <thead>
             <tr>
-              <th style="width: 45%;">操作功能</th>
+              <th class="col-width-action">操作功能</th>
               <th>快捷键 / 触发方式</th>
             </tr>
           </thead>
@@ -771,6 +950,14 @@
               <td>选中文字后直接按 <span class="shortcut-kbd">$</span>、<span class="shortcut-kbd">{</span>、<span class="shortcut-kbd">(</span> 或 <span class="shortcut-kbd">"</span></td>
             </tr>
             <tr>
+              <td><strong>历史版本差异逐处跳转</strong></td>
+              <td>在差异比对窗口按 <span class="shortcut-kbd">↑</span> / <span class="shortcut-kbd">P</span> (上一处) 或 <span class="shortcut-kbd">↓</span> / <span class="shortcut-kbd">N</span> (下一处)</td>
+            </tr>
+            <tr>
+              <td><strong>历史快照版本左右切换</strong></td>
+              <td>在差异比对窗口按 <span class="shortcut-kbd">←</span> / <span class="shortcut-kbd">[</span> (上一版本) 或 <span class="shortcut-kbd">→</span> / <span class="shortcut-kbd">]</span> (下一版本)</td>
+            </tr>
+            <tr>
               <td><strong>Windows Snap 分屏自动折叠</strong></td>
               <td>拖拽窗口至屏幕右侧半屏自动收起侧栏，拉大自动恢复</td>
             </tr>
@@ -779,6 +966,55 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-primary" id="btn-ok-shortcuts">我知道了 (Esc)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- History Snapshot Diff Modal -->
+  <div id="modal-history-diff" class="modal-overlay hidden">
+    <div class="modal-card modal-large">
+      <div class="modal-header">
+        <h3 id="diff-modal-title">🕒 历史版本差异比对</h3>
+        <button class="modal-close" id="btn-close-diff">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="diff-container">
+          <div class="diff-header-bar">
+            <div class="diff-header-left">
+              <span id="diff-file-label">📄 对比文档: main.tex</span>
+              <span id="diff-stats-badge" class="diff-stats-badge">0 处修改</span>
+            </div>
+
+            <div class="diff-header-center">
+              <!-- Left / Right Version Switcher -->
+              <div class="diff-version-controls" title="切换历史快照版本 (快捷键: ← / → 或 [ / ])">
+                <button id="btn-snapshot-prev" class="btn diff-nav-btn" title="查看上一版本 (快捷键: ← 或 [)">◀ 上一版本</button>
+                <span id="diff-snapshot-index" class="diff-version-index">版本 1 / 1</span>
+                <button id="btn-snapshot-next" class="btn diff-nav-btn" title="查看下一版本 (快捷键: → 或 ])">下一版本 ▶</button>
+              </div>
+
+              <div class="divider-vertical-sm"></div>
+
+              <!-- Up / Down Diff Hunk Navigator -->
+              <div class="diff-nav-controls" title="跳转修改差异位置 (快捷键: ↑ / ↓ 或 P / N)">
+                <button id="btn-diff-prev" class="btn diff-nav-btn" title="上一处修改 (快捷键: P 或 ↑)">▲ 上一处</button>
+                <span id="diff-nav-index" class="diff-nav-index">0 / 0</span>
+                <button id="btn-diff-next" class="btn diff-nav-btn" title="下一处修改 (快捷键: N 或 ↓)">▼ 下一处</button>
+              </div>
+            </div>
+
+            <div class="diff-header-right">
+              <span id="diff-time-label" title="当前快照拍摄时间">🕒 快照时间: 2026-10-22 10:00:00</span>
+            </div>
+          </div>
+          <div id="diff-content-scroll" class="diff-content-scroll">
+            <!-- Populated dynamically via JS -->
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-subtle" id="btn-cancel-diff">关闭</button>
+        <button class="btn btn-danger" id="btn-restore-diff-snapshot">↩️ 将项目整体恢复至此版本</button>
       </div>
     </div>
   </div>
@@ -795,6 +1031,6 @@
     <div class="math-preview-arrow" id="math-preview-arrow"></div>
   </div>
 
-  <script src="/static/app.js?v=4.8" charset="UTF-8"></script>
+  <script defer src="/static/app.js?v=5.5" charset="UTF-8"></script>
 </body>
 </html>
