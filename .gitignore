@@ -1,0 +1,34 @@
+# ==========================================
+# PaperLeaf - Git Ignore Configuration
+# Protects personal projects, cache & logs
+# ==========================================
+
+# 1. User Projects & Private Data (STRICTLY IGNORED)
+data/projects/
+data/cache/
+data/edge_profile/
+data/server.log
+
+# 2. Large Binary Executables (Downloaded automatically on setup)
+bin/tectonic.exe
+bin/*.zip
+
+# 3. Python Cache & Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.python_path
+venv/
+.venv/
+env/
+ENV/
+
+# 4. OS & IDE Metadata
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.tmp
+.vscode/
+.idea/

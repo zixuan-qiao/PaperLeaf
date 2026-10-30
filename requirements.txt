@@ -1,0 +1,4 @@
+flask>=2.0.0
+pillow>=8.0.0
+pypdf>=3.0.0
+psutil>=5.8.0

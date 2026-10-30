@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PaperLeaf - 本地免配置学术工作台</title>
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/icon-32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png">
+  <link rel="apple-touch-icon" href="/static/icon-192.png">
+  <link rel="manifest" href="/static/manifest.json">
+  <meta name="theme-color" content="#1e293b">
+  <link rel="stylesheet" href="/static/style.css?v=4.2">
+  <!-- Local Zero-Dependency CodeMirror with LaTeX Autocomplete -->
+  <link rel="stylesheet" href="/static/vendor/codemirror/codemirror.min.css">
+  <link rel="stylesheet" href="/static/vendor/codemirror/eclipse.min.css">
+  <link rel="stylesheet" href="/static/vendor/codemirror/show-hint.min.css">
+  <script src="/static/vendor/codemirror/codemirror.min.js" charset="UTF-8"></script>
+  <script src="/static/vendor/codemirror/stex.min.js" charset="UTF-8"></script>
+  <script src="/static/vendor/codemirror/closebrackets.min.js" charset="UTF-8"></script>
+  <script src="/static/vendor/codemirror/matchbrackets.min.js" charset="UTF-8"></script>
+  <script src="/static/vendor/codemirror/show-hint.min.js" charset="UTF-8"></script>
+  <script src="/static/vendor/codemirror/anyword-hint.min.js" charset="UTF-8"></script>
+  <!-- Local Zero-Dependency PDF.js Engine -->
+  <script src="/static/vendor/pdfjs/pdf.min.js" charset="UTF-8"></script>
+  <!-- Local Zero-Dependency KaTeX Formula Engine -->
+  <link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
+  <script src="/static/vendor/katex/katex.min.js" charset="UTF-8"></script>
+</head>
+<body>
+  <div id="app-container">
+    <!-- Top Global Header -->
+    <header id="top-bar">
+      <div class="bar-left">
+        <button id="btn-toggle-drawer" class="btn btn-icon" title="展开/收起项目列表与文件树">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+          <span class="btn-drawer-text">项目</span>
+        </button>
+        <div class="divider-vertical"></div>
+        <span id="current-project-title" class="project-title" title="当前项目名称">加载中...</span>
+        <div class="project-lang-dropdown" id="project-lang-dropdown">
+          <button id="current-project-lang" class="btn-badge-interactive" title="点击切换当前项目排版语言">
+            <span id="current-project-lang-text">🇨🇳 中文 (CTeX)</span>
+            <span class="dropdown-caret">▼</span>
+          </button>
+          <div id="project-lang-menu" class="lang-dropdown-menu hidden">
+            <div class="lang-menu-item" id="item-lang-chinese" data-lang="chinese">
+              <span>🇨🇳</span>
+              <span>中文排版 (CTeX)</span>
+              <span class="lang-menu-item-check" id="check-chinese">✓</span>
+            </div>
+            <div class="lang-menu-item" id="item-lang-english" data-lang="english">
+              <span>🇬🇧</span>
+              <span>英文学术 (Standard)</span>
+              <span class="lang-menu-item-check" id="check-english" style="display:none;">✓</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bar-center">
+        <!-- Compile Button & Status -->
+        <button id="btn-compile" class="btn btn-primary" title="快捷键: Ctrl+S 或 Ctrl+Enter">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          <span class="btn-compile-full">编译 (Ctrl+S)</span>
+          <span class="btn-compile-short">编译</span>
+        </button>
+        
+        <div id="compile-status" class="status-indicator idle">
+          <span class="status-dot"></span>
+          <span class="status-text">就绪</span>
+        </div>
+
+        <div class="divider-vertical"></div>
+
+        <!-- Auto Compile Toggle -->
+        <label class="toggle-control" title="开启后，停止打字1.2秒自动触发编译">
+          <input type="checkbox" id="toggle-autocompile" checked>
+          <span class="toggle-slider"></span>
+          <span class="toggle-label">⚡ 自动编译</span>
+        </label>
+      </div>
+
+      <div class="bar-right">
+        <!-- View Mode Switcher -->
+        <div class="view-mode-group">
+          <button id="btn-view-code" class="btn-toggle" title="纯代码模式 (专注打字)">💻 <span class="view-mode-text">纯代码</span></button>
+          <button id="btn-view-split" class="btn-toggle active" title="分栏对照模式 (可拖拽)">🌗 <span class="view-mode-text">分栏对照</span></button>
+          <button id="btn-view-paper" class="btn-toggle" title="纯论文模式 (阅读审阅)">📄 <span class="view-mode-text">纯论文</span></button>
+        </div>
+
+        <div class="divider-vertical"></div>
+
+        <button id="btn-export-zip" class="btn btn-subtle" title="将当前项目完整打包为 ZIP 压缩包下载">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+          <span class="btn-label-text">导出 ZIP</span>
+        </button>
+
+        <button id="btn-shortcuts" class="btn btn-icon" title="查看键盘快捷键一览 (F1)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2" ry="2"/><line x1="6" y1="8" x2="6" y2="8"/><line x1="10" y1="8" x2="10" y2="8"/><line x1="14" y1="8" x2="14" y2="8"/><line x1="18" y1="8" x2="18" y2="8"/><line x1="6" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="18" y2="12"/><line x1="10" y1="16" x2="14" y2="16"/></svg>
+          <span class="btn-label-text">快捷键</span>
+        </button>
+
+        <button id="btn-settings" class="btn btn-icon" title="设置与字体排版中心 (F2 / Ctrl+,)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span class="btn-label-text">设置与字体</span>
+        </button>
+
+        <button id="btn-theme-toggle" class="btn btn-icon" title="切换深色/浅色护眼模式">
+          <span id="theme-icon">🌙</span>
+        </button>
+
+        <div class="divider-vertical"></div>
+
+        <button id="btn-exit-app" class="btn btn-danger-subtle" title="退出 PaperLeaf">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10"/></svg>
+          <span class="btn-label-text">退出</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Workspace Layout -->
+    <div id="main-workspace">
+      <!-- 1. Left Drawer: Projects & File Tree (Resizable) -->
+      <aside id="drawer" class="drawer">
+        <!-- Top Drawer Tab Switcher (Projects on LEFT, File Tree on RIGHT) -->
+        <div class="drawer-tabs">
+          <button id="tab-projects" class="drawer-tab">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            <span>项目列表</span>
+          </button>
+          <button id="tab-filetree" class="drawer-tab active">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <span>文件树 (Files)</span>
+          </button>
+        </div>
+
+        <!-- View A: Current Project File Tree & Outline -->
+        <div id="view-filetree" class="drawer-view active">
+          <!-- Upper: Files List -->
+          <div id="file-tree-container" class="file-tree-container">
+            <div class="filetree-header">
+              <span class="filetree-title">📁 文件目录</span>
+              <div class="filetree-actions">
+                <button id="btn-tree-new-file" class="tree-action-btn" title="新建文件 (.tex, .bib)">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+                </button>
+                <button id="btn-tree-new-folder" class="tree-action-btn" title="新建文件夹 (例如 figures、images)">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+                </button>
+                <button id="btn-tree-upload" class="tree-action-btn" title="上传图片或文件 (PNG, JPG, PDF...)">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+                </button>
+                <button id="btn-tree-open-folder" class="tree-action-btn" title="在 Windows 资源管理器中打开项目文件夹">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                </button>
+              </div>
+              <input type="file" id="input-tree-upload" multiple style="display: none;">
+            </div>
+            <div id="file-tree-list" class="file-tree-list">
+              <!-- Populated dynamically via JS -->
+            </div>
+          </div>
+
+          <!-- Horizontal Resizer between File Tree and Outline -->
+          <div id="outline-resizer" class="resizer-handle horizontal-handle" title="按住上下拖拽调整大纲高度">
+            <span class="handle-dots">••••</span>
+          </div>
+
+          <!-- Lower: File Outline (Shown when editing .tex) -->
+          <div id="file-outline-container" class="file-outline-container">
+            <div class="outline-header" id="outline-header-toggle">
+              <span class="outline-title">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                <span>File outline (章节大纲)</span>
+              </span>
+            </div>
+            <div id="file-outline-list" class="file-outline-list">
+              <!-- Populated dynamically via JS -->
+            </div>
+          </div>
+        </div>
+
+        <!-- View B: Projects Switcher -->
+        <div id="view-projects" class="drawer-view">
+          <div class="drawer-header">
+            <h3>所有项目</h3>
+            <div style="display: flex; gap: 4px;">
+              <button id="btn-import-zip" class="btn btn-sm btn-subtle" title="上传并解压 ZIP 压缩包">⬆ 导入</button>
+              <button id="btn-new-project" class="btn btn-sm btn-primary" title="新建项目">+ 新建</button>
+            </div>
+            <input type="file" id="input-zip-file" accept=".zip" style="display: none;">
+          </div>
+          <div id="projects-list" class="projects-list">
+            <!-- Populated dynamically via JS -->
+          </div>
+        </div>
+
+        <div class="drawer-footer">
+          <small id="drawer-projects-dir">data\projects</small>
+        </div>
+      </aside>
+
+      <!-- Drawer Resizer (Vertical Drag Handle) -->
+      <div id="drawer-resizer" class="resizer-handle vertical-handle" title="按住拖拽调节项目列表宽度"></div>
+
+      <!-- 2. Editor Pane -->
+      <main id="editor-pane" class="pane">
+        <div class="pane-header">
+          <div class="editor-tabs-bar" id="editor-tabs-bar">
+            <div class="editor-tabs-container" id="editor-tabs-container">
+              <!-- Dynamically populated Overleaf-style tabs -->
+            </div>
+          </div>
+          <div class="file-name" id="current-editor-filename" style="display: none;">📄 main.tex</div>
+          <div class="editor-tools" id="editor-tools">
+            <button id="btn-open-search" class="tool-btn" title="查找与替换 (Ctrl+F / Ctrl+H)">🔍 查找</button>
+            <button id="btn-word-count" class="tool-btn" title="学术元素与字数统计">📊 统计</button>
+            <button id="btn-synctex-forward" class="tool-btn" title="代码同步定位到 PDF 对应页 (Ctrl+J)">🎯 定位</button>
+            <div class="font-controls" title="调节编辑器字号大小">
+              <button id="btn-font-dec" class="tool-btn-icon" title="缩小字号">A-</button>
+              <span id="font-size-label" class="font-size-label">14px</span>
+              <button id="btn-font-inc" class="tool-btn-icon" title="放大字号">A+</button>
+            </div>
+            <span id="save-indicator" class="save-status" title="已开启实时自动保存">🟢 已保存</span>
+          </div>
+        </div>
+        <!-- Micro Formatting Toolbar -->
+        <div id="editor-format-bar" class="editor-format-bar">
+          <div class="fmt-group">
+            <button id="fmt-bold" class="fmt-btn" title="粗体 \textbf{...} (Ctrl+B)"><b>B</b></button>
+            <button id="fmt-italic" class="fmt-btn" title="斜体 \textit{...} (Ctrl+I)"><i>I</i></button>
+            <button id="fmt-underline" class="fmt-btn" title="下划线 \underline{...} (Ctrl+U)"><u>U</u></button>
+            <button id="fmt-code" class="fmt-btn" title="等宽代码 \texttt{...} (Ctrl+Shift+C)"><span class="fmt-mono">tt</span></button>
+          </div>
+          <div class="fmt-divider"></div>
+          <div class="fmt-group">
+            <button id="fmt-math" class="fmt-btn" title="行内数学公式 $...$ (Ctrl+Shift+M)">$x$</button>
+            <button id="fmt-equation" class="fmt-btn" title="单行数学方程环境 equation (Ctrl+Shift+E)">∑ eq</button>
+          </div>
+          <div class="fmt-divider"></div>
+          <div class="fmt-group">
+            <button id="fmt-itemize" class="fmt-btn" title="无序列表 itemize">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3" cy="6" r="1.5" fill="currentColor"/><circle cx="3" cy="12" r="1.5" fill="currentColor"/><circle cx="3" cy="18" r="1.5" fill="currentColor"/></svg>
+              <span>列表</span>
+            </button>
+            <button id="fmt-enumerate" class="fmt-btn" title="编号列表 enumerate">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/></svg>
+              <span>序号</span>
+            </button>
+          </div>
+          <div class="fmt-divider"></div>
+          <div class="fmt-group">
+            <button id="fmt-quote" class="fmt-btn" title="LaTeX 学术双引号 ``...''">“ ”</button>
+            <button id="fmt-braces" class="fmt-btn" title="花括号包裹 {...}">{ }</button>
+          </div>
+        </div>
+
+        <!-- Smart Optimization & Diagnostic Banner (Opt-in Quick Fix) -->
+        <div id="smart-diagnostic-banner" class="smart-diagnostic-banner hidden">
+          <div class="diagnostic-banner-icon" id="diagnostic-banner-icon">💡</div>
+          <div class="diagnostic-banner-body">
+            <div class="diagnostic-banner-title" id="diagnostic-banner-title">排版智能建议</div>
+            <div class="diagnostic-banner-desc" id="diagnostic-banner-desc">检测到当前模板正文字体被降级为宽体，可能导致版面偏宽。</div>
+          </div>
+          <div class="diagnostic-banner-actions">
+            <button class="btn btn-primary btn-sm" id="btn-diagnostic-apply">一键对齐 Overleaf</button>
+            <button class="btn btn-subtle btn-sm" id="btn-diagnostic-ignore">保持现状</button>
+            <button class="btn-icon-subtle" id="btn-diagnostic-close" title="忽略并关闭">✕</button>
+          </div>
+        </div>
+
+        <!-- Code Editor -->
+        <div id="editor-wrapper" class="editor-wrapper">
+          <!-- Floating Search & Replace Bar -->
+          <div id="search-replace-bar" class="search-replace-bar hidden">
+            <div class="search-row">
+              <button id="btn-toggle-replace" class="btn-tool-toggle" title="展开/折叠替换 (Ctrl+H)">▶</button>
+              <div class="input-with-counter">
+                <input type="text" id="search-input" placeholder="查找 (Enter 下一个，Shift+Enter 上一个)..." spellcheck="false">
+                <span id="search-match-count" class="search-match-count">0 项</span>
+              </div>
+              <button id="btn-search-prev" class="btn btn-xs btn-subtle" title="上一个 (Shift+Enter)">▲</button>
+              <button id="btn-search-next" class="btn btn-xs btn-subtle" title="下一个 (Enter)">▼</button>
+              <button id="btn-search-case" class="btn btn-xs btn-toggle" title="区分大小写 (Aa)">Aa</button>
+              <button id="btn-search-close" class="btn btn-xs btn-icon" title="关闭 (Esc)">✕</button>
+            </div>
+            <div id="replace-row" class="replace-row hidden">
+              <input type="text" id="replace-input" placeholder="替换为..." spellcheck="false">
+              <button id="btn-replace-one" class="btn btn-xs btn-subtle" title="替换当前">替换</button>
+              <button id="btn-replace-all" class="btn btn-xs btn-primary" title="全部替换">全部替换</button>
+            </div>
+          </div>
+          <textarea id="code-editor"></textarea>
+        </div>
+        <!-- Media Preview Pane (for viewing uploaded images / PDFs directly) -->
+        <div id="media-preview-wrapper" class="media-preview-wrapper hidden">
+          <div class="media-preview-toolbar" id="media-preview-toolbar">
+            <div class="media-toolbar-left">
+              <span id="media-preview-title" class="media-preview-title" title="查看插图/PDF">image.png</span>
+            </div>
+            <div id="media-zoom-controls" class="media-zoom-controls media-toolbar-center">
+              <button id="btn-media-zoom-out" class="tool-btn-icon" title="缩小图像 (Ctrl + 滚轮向下)">−</button>
+              <span id="media-zoom-text" class="font-size-label" style="min-width: 44px; text-align: center;">100%</span>
+              <button id="btn-media-zoom-in" class="tool-btn-icon" title="放大图像 (Ctrl + 滚轮向上)">+</button>
+              <button id="btn-media-fit-width" class="tool-btn" title="适应窗口宽度 / 居中显示">↔ 适应</button>
+            </div>
+            <div class="media-toolbar-right">
+              <button id="btn-media-download" class="btn btn-sm btn-subtle" title="下载当前预览的原文件到本地">⬇ 下载</button>
+              <button id="btn-media-copy-latex" class="btn btn-sm btn-primary" title="复制 LaTeX 插图代码">📋 复制代码</button>
+              <button id="btn-media-back-code" class="btn btn-sm btn-subtle" title="返回编辑代码">📄 返回代码</button>
+            </div>
+          </div>
+          <div id="media-preview-content" class="media-preview-content">
+            <!-- Image tag or iframe for PDF -->
+          </div>
+        </div>
+        <!-- Error Log Bottom Bar -->
+        <div id="error-panel" class="error-panel hidden">
+          <div class="error-panel-header" id="error-panel-toggle">
+            <div class="error-panel-header-left">
+              <span id="error-title">⚠️ 编译报错 (0)</span>
+            </div>
+            <div class="error-panel-header-right">
+              <span class="error-toggle-icon" id="error-toggle-icon" title="折叠/展开错误列表">▼</span>
+              <button class="btn-error-close" id="btn-error-close" title="关闭报错面板">✕</button>
+            </div>
+          </div>
+          <div id="error-list" class="error-list"></div>
+        </div>
+      </main>
+
+      <!-- Center Split Resizer (Vertical Drag Handle with Overleaf-style SyncTeX Arrows) -->
+      <div id="split-resizer" class="resizer-handle vertical-handle" title="按住拖拽调节代码与论文比例">
+        <div class="split-synctex-nav" id="split-synctex-nav" title="双向同步跳转导航">
+          <button id="btn-synctex-to-pdf" class="split-nav-btn btn-to-pdf" title="从代码光标/选区跳转至 PDF (➔)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </button>
+          <button id="btn-synctex-to-code" class="split-nav-btn btn-to-code" title="从 PDF 当前位置/选区跳转至代码 (⬅)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- 3. PDF Preview Pane (HTML5 PDF.js) -->
+      <section id="pdf-pane" class="pane">
+        <div class="pane-header">
+          <div class="file-name">📑 编译预览 (PDF)</div>
+          <div class="pdf-tools">
+            <div class="pdf-zoom-controls">
+              <button id="btn-pdf-zoom-out" class="tool-btn-icon" title="缩小 (Ctrl + -)">−</button>
+              <span id="pdf-zoom-text" class="font-size-label">100%</span>
+              <button id="btn-pdf-zoom-in" class="tool-btn-icon" title="放大 (Ctrl + +)">+</button>
+              <button id="btn-pdf-fit-width" class="tool-btn" title="适应窗口宽度">↔ 适应</button>
+            </div>
+            <span id="pdf-page-indicator" class="pdf-page-indicator">第 1 / 1 页</span>
+            <button id="btn-refresh-pdf" class="btn btn-sm btn-subtle" title="重新渲染PDF">🔄 刷新</button>
+            <a id="btn-download-pdf" class="btn btn-sm btn-subtle" href="#" target="_blank" download="paper.pdf" title="下载到本地">⬇ 下载</a>
+          </div>
+        </div>
+        <div id="pdf-wrapper" class="pdf-wrapper">
+          <div id="pdf-container" class="pdf-container"></div>
+          <div id="pdf-placeholder" class="pdf-placeholder">
+            <div class="placeholder-icon">📄</div>
+            <p>等待首次编译生成 PDF...</p>
+            <button id="btn-initial-compile" class="btn btn-primary">立即开始首次编译</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- New Project Modal -->
+  <div id="modal-new-project" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>新建论文项目</h3>
+        <button class="modal-close" id="btn-close-modal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>项目名称</label>
+          <input type="text" id="input-project-name" placeholder="例如：MyResearchPaper_2026" autofocus>
+        </div>
+        <div class="form-group">
+          <label>正文语言与模板预设</label>
+          <div class="radio-card-group">
+            <label class="radio-card">
+              <input type="radio" name="project-lang" value="chinese" checked>
+              <div class="card-content">
+                <span class="card-title">🇨🇳 中文论文 (CTeX)</span>
+                <span class="card-desc">内置 ctexart，自动配置中文字体与 UTF-8，写中文无乱码报错。</span>
+              </div>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="project-lang" value="english">
+              <div class="card-content">
+                <span class="card-title">🇬🇧 英文论文 (Standard)</span>
+                <span class="card-desc">标准 article 模板，适合投递国外期刊、英文会议。</span>
+              </div>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-subtle" id="btn-cancel-modal">取消</button>
+        <button class="btn btn-primary" id="btn-confirm-create">立即创建</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings & Typography Center Modal -->
+  <div id="modal-storage" class="modal-overlay hidden">
+    <div class="modal-card modal-large">
+      <div class="modal-header">
+        <div class="modal-title-with-tabs">
+          <h3>⚙️ 设置与字体中心</h3>
+          <div class="modal-subnav-tabs">
+            <button class="modal-subnav-btn active" id="btn-tab-fonts" data-target="settings-tab-fonts">🔤 字体管理与速查</button>
+            <button class="modal-subnav-btn" id="btn-tab-storage" data-target="settings-tab-storage">📁 本地存储与环境</button>
+          </div>
+        </div>
+        <button class="modal-close" id="btn-close-storage">✕</button>
+      </div>
+      <div class="modal-body">
+        <!-- Pane 1: Fonts & Typography Guide -->
+        <div id="settings-tab-fonts" class="settings-tab-pane">
+          <!-- 1. Font Readiness Status Dashboard -->
+          <div class="font-section-card">
+            <div class="font-section-header">
+              <span class="font-section-title">📌 字体就绪状态</span>
+              <button id="btn-scan-fonts" class="btn btn-xs btn-subtle">🔍 扫描本机已装字体</button>
+            </div>
+            <div class="font-status-grid">
+              <div class="font-status-item">
+                <div class="font-status-left">
+                  <div class="font-name">Fandol 官方中文字体族</div>
+                  <div class="font-desc">宋体、黑体、楷体、仿宋（1:1 对齐 Overleaf 原生排版）</div>
+                </div>
+                <div class="font-badge badge-primary">已就绪 (默认)</div>
+              </div>
+              <div class="font-status-item">
+                <div class="font-status-left">
+                  <div class="font-name">Windows 常用基础字体库</div>
+                  <div class="font-desc">中易宋体 (SimSun)、黑体 (SimHei)、楷体 (KaiTi)、微软雅黑</div>
+                </div>
+                <div class="font-badge badge-success">已就绪</div>
+              </div>
+            </div>
+
+            <!-- Scanned system fonts container -->
+            <div id="scanned-fonts-wrapper" class="scanned-fonts-wrapper hidden" style="display: none;">
+              <div class="scanned-fonts-header">
+                <span>本机已检测到 <strong id="scanned-fonts-count" class="highlight-blue">0</strong> 款中文字体（点击字体名即可复制）：</span>
+              </div>
+              <div id="scanned-fonts-list" class="scanned-fonts-list">
+                <!-- Dynamically populated via JS -->
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. Overleaf Font Clarification Tip -->
+          <div class="storage-tip" style="margin-top: 14px; background-color: #f0fdf4; border-left-color: #10b981; color: #065f46;">
+            💡 <strong>为什么默认是宋体？（Overleaf 官方规范说明）</strong><br>
+            <span style="color: #047857; font-size: 12px; line-height: 1.7; display: block; margin-top: 4px;">
+              • <strong>正统学术规范</strong>：Overleaf 官方在编译中文 <code>ctexart</code> 时的官方默认字体即为 <strong>FandolSong（Fandol 宋体/衬线体）</strong>，符合学术期刊与国标规范；<br>
+              • <strong>想要现代清爽无衬线黑体？</strong>：若您偏好<strong>粗细均匀、无三角衬线、科技感强</strong>的现代风格，点击下方任意方案的 <strong>“✍️ 一键应用到文档”</strong>，系统将自动更新导言区并秒级重新编译！
+            </span>
+          </div>
+
+          <!-- 3. Custom Font Usage Guide (Operation Manual) -->
+          <div class="storage-tip" style="margin-top: 10px; background-color: #f8fafc; border-left-color: #3b82f6; color: #1e293b;">
+            💡 <strong>如何使用自己下载的第三方字体？（操作指引）</strong><br>
+            <span style="color: #475569; font-size: 12px; line-height: 1.7; display: block; margin-top: 4px;">
+              ① 将下载好的 <code>.ttf</code> 或 <code>.otf</code> 字体文件直接复制到当前项目的 <code>fonts/</code> 文件夹中；<br>
+              ② 在 LaTeX 主文档导言区加入：<code>\setCJKmainfont{字体文件名.otf}[Path=fonts/]</code> 即可免安装免配置直接调用！
+            </span>
+          </div>
+
+          <!-- 4. LaTeX Font Code Snippets (Quick Cheat Sheet) -->
+          <div class="font-section-card" style="margin-top: 14px;">
+            <div class="font-section-header">
+              <span class="font-section-title">📝 常用字体排版方案（点击“一键应用”即可自动注入导言区并重新编译）</span>
+            </div>
+            
+            <div class="font-snippet-list">
+              <!-- Snippet 1: Overleaf Default (Fandol SongTi) -->
+              <div class="font-snippet-card">
+                <div class="font-snippet-top">
+                  <div class="font-snippet-info">
+                    <strong>方案 A：Overleaf 官方标准风（默认 Fandol 宋体+黑体+楷体）</strong>
+                    <span>传统衬线学术规范，与国际 Overleaf 原生编译结果 1:1 像素级一致</span>
+                  </div>
+                  <div class="font-snippet-actions">
+                    <button class="btn btn-xs btn-subtle btn-copy-snippet" data-code="\documentclass[UTF8]{ctexart}">📋 复制</button>
+                    <button class="btn btn-xs btn-primary btn-apply-snippet" data-code="\documentclass[UTF8]{ctexart}">✍️ 一键应用到文档</button>
+                  </div>
+                </div>
+                <pre class="font-snippet-code"><code>\documentclass[UTF8]{ctexart}</code></pre>
+              </div>
+
+              <!-- Snippet 2: Fandol Modern Sans-Serif / HeiTi -->
+              <div class="font-snippet-card">
+                <div class="font-snippet-top">
+                  <div class="font-snippet-info">
+                    <strong>方案 B：Fandol 官方现代黑体风（无衬线，最清爽现代，笔画无三角）</strong>
+                    <span>全篇正文采用 FandolHei 现代黑体，字形整洁饱满，彻底告别传统宋体感</span>
+                  </div>
+                  <div class="font-snippet-actions">
+                    <button class="btn btn-xs btn-subtle btn-copy-snippet" data-code="\setCJKmainfont{FandolHei-Regular.otf}[BoldFont=FandolHei-Bold.otf]">📋 复制</button>
+                    <button class="btn btn-xs btn-primary btn-apply-snippet" data-code="\setCJKmainfont{FandolHei-Regular.otf}[BoldFont=FandolHei-Bold.otf]">✍️ 一键应用到文档</button>
+                  </div>
+                </div>
+                <pre class="font-snippet-code"><code>\setCJKmainfont{FandolHei-Regular.otf}[BoldFont=FandolHei-Bold.otf]</code></pre>
+              </div>
+
+              <!-- Snippet 3: Microsoft YaHei / Modern Sans-Serif -->
+              <div class="font-snippet-card">
+                <div class="font-snippet-top">
+                  <div class="font-snippet-info">
+                    <strong>方案 C：现代清爽微软雅黑风（设置微软雅黑为中文主字体）</strong>
+                    <span>适合学术展示海报、课程设计汇报、演示幻灯片排版，圆润美观</span>
+                  </div>
+                  <div class="font-snippet-actions">
+                    <button class="btn btn-xs btn-subtle btn-copy-snippet" data-code="\setCJKmainfont{Microsoft YaHei}">📋 复制</button>
+                    <button class="btn btn-xs btn-primary btn-apply-snippet" data-code="\setCJKmainfont{Microsoft YaHei}">✍️ 一键应用到文档</button>
+                  </div>
+                </div>
+                <pre class="font-snippet-code"><code>\setCJKmainfont{Microsoft YaHei}</code></pre>
+              </div>
+
+              <!-- Snippet 4: Windows System Fonts -->
+              <div class="font-snippet-card">
+                <div class="font-snippet-top">
+                  <div class="font-snippet-info">
+                    <strong>方案 D：高校学术国标标准风（锁定 Windows 中易宋体+黑体）</strong>
+                    <span>适合严格要求 Windows SimSun 传统中易宋体的国内学位答辩论文规范</span>
+                  </div>
+                  <div class="font-snippet-actions">
+                    <button class="btn btn-xs btn-subtle btn-copy-snippet" data-code="\documentclass[UTF8, fontset=windows]{ctexart}">📋 复制</button>
+                    <button class="btn btn-xs btn-primary btn-apply-snippet" data-code="\documentclass[UTF8, fontset=windows]{ctexart}">✍️ 一键应用到文档</button>
+                  </div>
+                </div>
+                <pre class="font-snippet-code"><code>\documentclass[UTF8, fontset=windows]{ctexart}</code></pre>
+              </div>
+
+              <!-- Snippet 5: Project Portable Custom Font -->
+              <div class="font-snippet-card">
+                <div class="font-snippet-top">
+                  <div class="font-snippet-info">
+                    <strong>方案 E：项目内免安装私有字体（读取 fonts/ 相对目录）</strong>
+                    <span>免系统管理员权限，把字体文件放在项目的 fonts/ 目录下跨电脑随意移动</span>
+                  </div>
+                  <div class="font-snippet-actions">
+                    <button class="btn btn-xs btn-subtle btn-copy-snippet" data-code="\setCJKmainfont{MyFont.otf}[Path=fonts/]">📋 复制</button>
+                    <button class="btn btn-xs btn-primary btn-apply-snippet" data-code="\setCJKmainfont{MyFont.otf}[Path=fonts/]">✍️ 一键应用到文档</button>
+                  </div>
+                </div>
+                <pre class="font-snippet-code"><code>\setCJKmainfont{MyFont.otf}[Path=fonts/]</code></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pane 2: Storage & Environment -->
+        <div id="settings-tab-storage" class="settings-tab-pane hidden">
+          <!-- 1. Local Storage & Cache Card -->
+          <div class="font-section-card" style="margin-bottom: 12px;">
+            <div class="font-section-header">
+              <span class="font-section-title">📁 本地数据与宏包缓存</span>
+              <span class="font-badge badge-primary">完全便携目录</span>
+            </div>
+            <div class="storage-info-item">
+              <strong>宏包缓存目录（便携本地存储，零 C 盘占用）：</strong>
+              <code id="info-cache-dir">data\cache</code>
+            </div>
+            <div class="storage-info-item">
+              <strong>当前已缓存宏包体积：</strong>
+              <span id="info-cache-size" class="highlight-green">计算中...</span>
+            </div>
+            <div class="storage-info-item" style="margin-bottom: 0;">
+              <strong>项目源码保存目录：</strong>
+              <code id="info-projects-dir">data\projects</code>
+            </div>
+          </div>
+
+          <!-- 2. Engine & Runtime Card -->
+          <div class="font-section-card" style="margin-bottom: 12px;">
+            <div class="font-section-header">
+              <span class="font-section-title">⚙️ 编译核心与运行模式</span>
+              <span class="font-badge badge-success">XeTeX Unicode 引擎</span>
+            </div>
+            <div class="storage-info-item">
+              <strong>本地编译器执行文件：</strong>
+              <code id="info-tectonic-path">bin\tectonic.exe (XeTeX Unicode)</code>
+            </div>
+            <div class="storage-info-item" style="margin-bottom: 0;">
+              <strong>软件运行架构：</strong>
+              <code style="color: #10b981; font-weight: 500;">✓ 免安装独立便携版 · 零系统注册表污染 · 不依赖任何外部大型发行版</code>
+            </div>
+          </div>
+
+          <!-- 3. Cache Principles & Tips -->
+          <div class="storage-tip" style="margin-top: 12px;">
+            💡 <strong>按需下载原则</strong>：编写 LaTeX 时只在首次引入新包时联网下载并永久缓存至本地目录，后续永远秒开离线复用。
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <span style="font-size: 12px; color: #64748b; margin-right: auto;">💡 快捷键：按 <strong>F2</strong> 或 <strong>Esc</strong> 可快速打开/关闭此面板</span>
+        <button class="btn btn-primary" id="btn-ok-storage">我知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Exit Confirmation Modal -->
+  <div id="modal-exit" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>退出 PaperLeaf</h3>
+        <button class="modal-close" id="btn-close-exit">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 14px; color: #334155; margin-bottom: 12px;">
+          所有正在编辑的内容均已<strong>自动实时保存至本地项目目录</strong>。
+        </p>
+        <div class="storage-tip" style="background-color: #f8fafc; border-left-color: #10b981; color: #047857;">
+          ✓ 安全提示：确认退出后将干净退出所有后台服务与窗口，释放内存。
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-subtle" id="btn-cancel-exit">取消</button>
+        <button class="btn btn-danger" id="btn-confirm-exit">确认退出并关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Word Count Statistics Modal -->
+  <div id="modal-word-count" class="modal-overlay hidden">
+    <div class="modal-card modal-sm">
+      <div class="modal-header">
+        <h3>📊 论文学术元素与字数统计</h3>
+        <button class="modal-close" id="btn-close-word-count">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-number" id="stat-words">0</div>
+            <div class="stat-label">英文单词数 (Words)</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-number" id="stat-chars">0</div>
+            <div class="stat-label">中文字符数 (Chars)</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-number" id="stat-math">0</div>
+            <div class="stat-label">数学公式数 (Math)</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-number" id="stat-floats">0</div>
+            <div class="stat-label">图表数量 (Figs/Tabs)</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-number" id="stat-cites">0</div>
+            <div class="stat-label">文献引用数 (Cites)</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-number" id="stat-lines">0</div>
+            <div class="stat-label">源码有效行 (Lines)</div>
+          </div>
+        </div>
+        <div class="storage-tip" style="margin-top: 14px;">
+          💡 <strong>学术统计原则</strong>：已自动剥离 LaTeX 编译命令、标签定义与 `%` 注释，仅计算真实学术正文与公式。
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="btn-ok-word-count">我知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Clean Export Modal -->
+  <div id="modal-export" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>📦 导出论文 ZIP 压缩包</h3>
+        <button class="modal-close" id="btn-close-export">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="export-options">
+          <div class="export-option-card selected" id="opt-export-clean">
+            <div class="export-option-icon">🚀</div>
+            <div class="export-option-text">
+              <div class="export-option-title">arXiv / 期刊纯净投稿包 (推荐)</div>
+              <div class="export-option-desc">自动智能剔除 .aux, .log, .synctex.gz, .out 等一切编译残留垃圾，只打包纯净论文源码与插图素材，符合国际期刊严苛上传规范。</div>
+            </div>
+            <div class="export-option-check">✓</div>
+          </div>
+
+          <div class="export-option-card" id="opt-export-full">
+            <div class="export-option-icon">📁</div>
+            <div class="export-option-text">
+              <div class="export-option-title">完整项目备份包</div>
+              <div class="export-option-desc">包含当前项目目录下的所有原始文件与元数据，适合个人多机完整迁移备份。</div>
+            </div>
+            <div class="export-option-check">✓</div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-subtle" id="btn-cancel-export">取消</button>
+        <button class="btn btn-primary" id="btn-confirm-export">立即打包下载</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shortcuts Cheat Sheet Modal -->
+  <div id="modal-shortcuts" class="modal-overlay hidden">
+    <div class="modal-card" style="max-width: 620px;">
+      <div class="modal-header">
+        <h3>⌨ 键盘快捷键与高效排版指南</h3>
+        <button class="modal-close" id="btn-close-shortcuts">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 12px 20px 20px;">
+        <table class="shortcuts-table">
+          <thead>
+            <tr>
+              <th style="width: 45%;">操作功能</th>
+              <th>快捷键 / 触发方式</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>立即编译并刷新 PDF</strong></td>
+              <td><span class="shortcut-kbd">Ctrl</span>+<span class="shortcut-kbd">S</span> 或 <span class="shortcut-kbd">Ctrl</span>+<span class="shortcut-kbd">Enter</span></td>
+            </tr>
+            <tr>
+              <td><strong>源码 → PDF 双向正向定位</strong></td>
+              <td><strong>双击源码</strong> 或 <span class="shortcut-kbd">Ctrl</span>+<span class="shortcut-kbd">J</span></td>
+            </tr>
+            <tr>
+              <td><strong>PDF → 源码 双向反向跳转</strong></td>
+              <td><strong>双击 PDF 页面文本</strong></td>
+            </tr>
+            <tr>
+              <td><strong>LaTeX 宏包与命令智能补全</strong></td>
+              <td>输入 <span class="shortcut-kbd">\</span> 自动提示，或按 <span class="shortcut-kbd">Ctrl</span>+<span class="shortcut-kbd">Space</span> / <span class="shortcut-kbd">Alt</span>+<span class="shortcut-kbd">/</span></td>
+            </tr>
+            <tr>
+              <td><strong>实时数学公式浮动预览</strong></td>
+              <td>光标置于 <span class="shortcut-kbd">$...$</span> 或 <span class="shortcut-kbd">equation</span> 内部实时渲染</td>
+            </tr>
+            <tr>
+              <td><strong>代码查找 / 全局替换</strong></td>
+              <td><span class="shortcut-kbd">Ctrl</span>+<span class="shortcut-kbd">F</span> (查找) / <span class="shortcut-kbd">Ctrl</span>+<span class="shortcut-kbd">H</span> (替换)</td>
+            </tr>
+            <tr>
+              <td><strong>学术快速排版（粗体/斜体/代码）</strong></td>
+              <td><span class="shortcut-kbd">Ctrl</span>+<span class="shortcut-kbd">B</span> / <span class="shortcut-kbd">Ctrl</span>+<span class="shortcut-kbd">I</span> / <span class="shortcut-kbd">Ctrl</span>+<span class="shortcut-kbd">Shift</span>+<span class="shortcut-kbd">C</span></td>
+            </tr>
+            <tr>
+              <td><strong>单行数学公式 / 快速方程</strong></td>
+              <td><span class="shortcut-kbd">Ctrl</span>+<span class="shortcut-kbd">Shift</span>+<span class="shortcut-kbd">M</span> ($) / <span class="shortcut-kbd">Ctrl</span>+<span class="shortcut-kbd">Shift</span>+<span class="shortcut-kbd">E</span> (eq)</td>
+            </tr>
+            <tr>
+              <td><strong>单行代码注释 / 取消注释</strong></td>
+              <td><span class="shortcut-kbd">Ctrl</span>+<span class="shortcut-kbd">/</span></td>
+            </tr>
+            <tr>
+              <td><strong>智能括号与引号自动包裹</strong></td>
+              <td>选中文字后直接按 <span class="shortcut-kbd">$</span>、<span class="shortcut-kbd">{</span>、<span class="shortcut-kbd">(</span> 或 <span class="shortcut-kbd">"</span></td>
+            </tr>
+            <tr>
+              <td><strong>Windows Snap 分屏自动折叠</strong></td>
+              <td>拖拽窗口至屏幕右侧半屏自动收起侧栏，拉大自动恢复</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="btn-ok-shortcuts">我知道了 (Esc)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Floating Math Formula Real-Time Preview Tooltip -->
+  <div id="math-preview-tooltip" class="math-preview-tooltip hidden">
+    <div class="math-preview-header">
+      <span class="math-preview-badge">📐 公式实时预览</span>
+      <span id="math-preview-status" class="math-preview-status ok">就绪</span>
+    </div>
+    <div id="math-preview-content" class="math-preview-content">
+      <!-- Dynamically rendered via KaTeX -->
+    </div>
+    <div class="math-preview-arrow" id="math-preview-arrow"></div>
+  </div>
+
+  <script src="/static/app.js?v=4.8" charset="UTF-8"></script>
+</body>
+</html>
