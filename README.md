@@ -1,4 +1,4 @@
-﻿<p align="center">
+<p align="center">
   <img src="static/icon-192.png" alt="PaperLeaf Logo" width="108" height="108" />
 </p>
 
@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/paperleaf_hero.png" alt="PaperLeaf Interface" width="920" style="border-radius: 8px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);" />
+  <img src="docs/images/paperleaf_features.png" alt="PaperLeaf Architecture & Features" width="940" style="border-radius: 8px; box-shadow: 0 8px 30px rgba(0,0,0,0.15);" />
 </p>
 
 ---
