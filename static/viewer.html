@@ -101,6 +101,7 @@
     const pageNumLabel = document.getElementById('popout-page-num');
 
     let currentPdfDoc = null;
+    let currentDoc = urlParams.get('doc') || '';
     let pdfScale = 1.0;
     let isFitWidth = true;
     let isRendering = false;
@@ -113,7 +114,7 @@
       channel.onmessage = (e) => {
         const msg = e.data || {};
         if (msg.type === 'pdf_updated') {
-          loadPdf(msg.url || `/api/projects/${projectId}/pdf?t=${Date.now()}`);
+          loadPdf(msg.url || `/api/projects/${projectId}/pdf?doc=${encodeURIComponent(currentDoc)}&t=${Date.now()}`);
         } else if (msg.type === 'synctex_forward') {
           highlightPdfRegion(msg.page, msg.x, msg.y, msg.w, msg.h);
         }
@@ -122,6 +123,11 @@
 
     async function loadPdf(url) {
       try {
+        try {
+          const parsed = new URL(url, window.location.origin);
+          const d = parsed.searchParams.get('doc');
+          if (d) currentDoc = d;
+        } catch(e) {}
         const loadingTask = pdfjsLib.getDocument({
           url: url,
           cMapUrl: '/static/vendor/pdfjs/cmaps/',
@@ -200,7 +206,7 @@
             const ptX = clickX / effScale;
             const ptY = clickY / effScale;
             try {
-              const res = await fetch(`/api/projects/${projectId}/synctex/backward?page=${pageNum}&x=${ptX.toFixed(1)}&y=${ptY.toFixed(1)}`);
+              const res = await fetch(`/api/projects/${projectId}/synctex/backward?page=${pageNum}&x=${ptX.toFixed(1)}&y=${ptY.toFixed(1)}&doc=${encodeURIComponent(currentDoc)}`);
               const data = await res.json();
               if (data.success && data.line && channel) {
                 channel.postMessage({
@@ -305,7 +311,7 @@
 
     async function sendBackwardSync(pageNum, ptX, ptY) {
       try {
-        const res = await fetch(`/api/projects/${projectId}/synctex/backward?page=${pageNum}&x=${ptX.toFixed(1)}&y=${ptY.toFixed(1)}`);
+        const res = await fetch(`/api/projects/${projectId}/synctex/backward?page=${pageNum}&x=${ptX.toFixed(1)}&y=${ptY.toFixed(1)}&doc=${encodeURIComponent(currentDoc)}`);
         const data = await res.json();
         if (data.success && data.line && channel) {
           channel.postMessage({

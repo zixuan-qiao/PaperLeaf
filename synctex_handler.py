@@ -97,25 +97,65 @@ def get_synctex_data(synctex_path):
 
     return data
 
-def resolve_synctex_path(project_dir):
+def resolve_synctex_path(project_dir, doc=None):
     """Dynamically find the generated synctex.gz in the project's build directory."""
     build_dir = os.path.join(project_dir, 'build')
     if not os.path.exists(build_dir):
         return os.path.join(build_dir, 'main.synctex.gz')
+
+    if doc:
+        clean_doc = doc.strip().replace('\\', '/')
+        stem = os.path.splitext(os.path.basename(clean_doc))[0]
+        specific_synctex = os.path.join(build_dir, f"{stem}.synctex.gz")
+        if os.path.exists(specific_synctex):
+            return specific_synctex
+
+    # Check meta.json for last_compiled_doc or root_document
+    meta_path = os.path.join(project_dir, 'meta.json')
+    if os.path.exists(meta_path):
+        try:
+            import json
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+            last_doc = meta.get('last_compiled_doc') or meta.get('root_document')
+            if last_doc:
+                stem = os.path.splitext(os.path.basename(last_doc))[0]
+                target = os.path.join(build_dir, f"{stem}.synctex.gz")
+                if os.path.exists(target):
+                    return target
+        except Exception:
+            pass
+
     cands = [os.path.join(build_dir, f) for f in os.listdir(build_dir) if f.endswith('.synctex.gz')]
     if cands:
         cands.sort(key=lambda x: os.path.getmtime(x), reverse=True)
         return cands[0]
     return os.path.join(build_dir, 'main.synctex.gz')
 
-def find_pos_for_line(project_dir, filename, target_line):
+def find_pos_for_line(project_dir, filename, target_line, doc=None):
     """Forward SyncTeX: find page and bounding box (x, y, w, h in pt) for a given code line."""
-    synctex_path = resolve_synctex_path(project_dir)
-    data = get_synctex_data(synctex_path)
+    clean_name = os.path.basename(filename.strip().replace('\\\\', '/').replace('\\', '/')).lower()
+
+    # 1. First attempt: resolve synctex via doc parameter
+    synctex_path = resolve_synctex_path(project_dir, doc=doc or filename)
+    data = get_synctex_data(synctex_path) if synctex_path else None
+
+    # 2. If data is None or clean_name is not in input_tags of this synctex file,
+    # search across all .synctex.gz in build/ to find the one that includes this file
+    if not data or clean_name not in data.get('input_tags', {}):
+        build_dir = os.path.join(project_dir, 'build')
+        if os.path.exists(build_dir):
+            cands = [os.path.join(build_dir, f) for f in os.listdir(build_dir) if f.endswith('.synctex.gz')]
+            for cand in cands:
+                cand_data = get_synctex_data(cand)
+                if cand_data and clean_name in cand_data.get('input_tags', {}):
+                    synctex_path = cand
+                    data = cand_data
+                    break
+
     if not data:
         return {'page': 1, 'x': 50, 'y': 100, 'w': 200, 'h': 16}
 
-    clean_name = os.path.basename(filename.strip().replace('\\\\', '/').replace('\\', '/')).lower()
     target_tag = data['input_tags'].get(clean_name, 1)
 
     key = (target_tag, target_line)
@@ -132,23 +172,24 @@ def find_pos_for_line(project_dir, filename, target_line):
     p, x, y, w, h = data['tag_line_to_pos'][best_key][0]
     return {'page': p, 'x': round(x, 1), 'y': round(y, 1), 'w': round(w, 1), 'h': round(h, 1)}
 
-def find_page_for_line(project_dir, filename, target_line):
-    pos = find_pos_for_line(project_dir, filename, target_line)
+def find_page_for_line(project_dir, filename, target_line, doc=None):
+    pos = find_pos_for_line(project_dir, filename, target_line, doc=doc)
     return pos.get('page', 1)
 
-def find_line_for_pos(project_dir, target_page, click_x, click_y):
+def find_line_for_pos(project_dir, target_page, click_x, click_y, doc=None):
     """Backward SyncTeX: find source file and line for a click position on a PDF page."""
-    synctex_path = resolve_synctex_path(project_dir)
+    synctex_path = resolve_synctex_path(project_dir, doc=doc)
     data = get_synctex_data(synctex_path)
+    default_file = os.path.basename(doc.strip().replace('\\', '/')) if doc else 'main.tex'
     if not data:
-        return {'file': 'main.tex', 'line': 1}
+        return {'file': default_file, 'line': 1}
 
     records = data['records_by_page'].get(target_page, [])
     if not records:
         # Fallback to page 1 records if page empty
         records = data['records_by_page'].get(1, [])
         if not records:
-            return {'file': 'main.tex', 'line': 1}
+            return {'file': default_file, 'line': 1}
 
     # Distance metric: Y distance is weighted 3x more heavily than X distance
     # because in text layouts, lines are horizontal bands.
@@ -166,7 +207,8 @@ def find_line_for_pos(project_dir, target_page, click_x, click_y):
 
     if best_rec:
         tag, lno, _, _, _, _ = best_rec
-        fname = data['tag_to_file'].get(tag, 'main.tex')
+        fname = data['tag_to_file'].get(tag, default_file)
         return {'file': fname, 'line': lno}
 
-    return {'file': 'main.tex', 'line': 1}
+    return {'file': default_file, 'line': 1}
+

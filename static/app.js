@@ -116,6 +116,18 @@ function createPdfLoadingTask(targetUrl) {
 }
 let currentPdfDoc = null;
 let currentPdfUrl = null;
+
+function getCurrentPdfDocName() {
+  if (currentPdfUrl) {
+    try {
+      const urlObj = new URL(currentPdfUrl, window.location.origin);
+      const doc = urlObj.searchParams.get('doc');
+      if (doc) return doc;
+    } catch (e) {}
+  }
+  return currentActiveFile || 'main.tex';
+}
+
 let pdfScale = 1.0;
 let isFitWidth = true;
 let isRenderingPdf = false;
@@ -483,6 +495,8 @@ function initEditor() {
     editor = CodeMirror.fromTextArea(textarea, {
       mode: 'stex',
       lineNumbers: true,
+      foldGutter: true,
+      gutters: ["CodeMirror-linenumbers", "CodeMirror-foldgutter"],
       matchBrackets: true,
       autoCloseBrackets: true,
       theme: 'eclipse',
@@ -490,6 +504,8 @@ function initEditor() {
       tabSize: 2,
       indentWithTabs: false,
       extraKeys: {
+        'Ctrl-Q': function(cm) { cm.foldCode(cm.getCursor()); },
+        'Cmd-Q': function(cm) { cm.foldCode(cm.getCursor()); },
         'Ctrl-S': function() { triggerCompile(true); },
         'Cmd-S': function() { triggerCompile(true); },
         'Ctrl-Enter': function() { triggerCompile(true); },
@@ -524,6 +540,22 @@ function initEditor() {
         'Esc': function(cm) { closeSearchBar(); hideMathTooltip(); }
       }
     });
+
+    const cmWrapper = editor.getWrapperElement();
+    if (cmWrapper) {
+      cmWrapper.setAttribute('data-ms-editor', 'false');
+      cmWrapper.setAttribute('spellcheck', 'false');
+      cmWrapper.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showEditorContextMenu(e);
+      });
+    }
+    const cmInputField = editor.getInputField();
+    if (cmInputField) {
+      cmInputField.setAttribute('data-ms-editor', 'false');
+      cmInputField.setAttribute('spellcheck', 'false');
+    }
 
     editor.on('inputRead', (cm, change) => {
       // Trigger autocomplete when typing \ or letters, or inside \cite{ / \ref{
@@ -738,6 +770,12 @@ function renderProjects(projects) {
       await selectProject(p.id, p);
     });
 
+    item.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showProjectContextMenu(e, p);
+    });
+
     const deleteBtn = item.querySelector('.btn-delete-proj');
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -747,6 +785,583 @@ function renderProjects(projects) {
     projectsList.appendChild(item);
   });
 }
+
+// --- Global Custom Context Menus & Quick Toast ---
+let activeContextProject = null;
+let activeContextFile = null;
+
+function positionContextMenu(menu, x, y, width = 200, height = 220) {
+  if (x + width > window.innerWidth) x = window.innerWidth - width - 8;
+  if (y + height > window.innerHeight) y = window.innerHeight - height - 8;
+  menu.style.left = `${Math.max(8, x)}px`;
+  menu.style.top = `${Math.max(8, y)}px`;
+}
+
+function hideAllCustomContextMenus() {
+  const pMenu = document.getElementById('project-context-menu');
+  if (pMenu) pMenu.classList.add('hidden');
+  const fMenu = document.getElementById('filetree-context-menu');
+  if (fMenu) fMenu.classList.add('hidden');
+  const eMenu = document.getElementById('editor-context-menu');
+  if (eMenu) eMenu.classList.add('hidden');
+  activeContextProject = null;
+  activeContextFile = null;
+}
+
+function showQuickToast(msg) {
+  const toast = document.getElementById('quick-toast');
+  if (!toast) return;
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(() => {
+    toast.classList.remove('show');
+  }, 2200);
+}
+
+// 1. Project Context Menu
+function showProjectContextMenu(e, project) {
+  hideAllCustomContextMenus();
+  activeContextProject = project;
+  const menu = document.getElementById('project-context-menu');
+  if (!menu) return;
+  menu.classList.remove('hidden');
+  positionContextMenu(menu, e.clientX, e.clientY, 190, 160);
+}
+
+async function renameProjectInternal(projectId, newName) {
+  if (!projectId || !newName) return;
+  try {
+    const res = await fetch(`/api/projects/${projectId}/rename`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName })
+    });
+    const data = await res.json();
+    if (data.success) {
+      if (currentProjectMeta && currentProjectMeta.id === projectId) {
+        currentProjectMeta.name = newName;
+        const titleEl = document.getElementById('current-project-title');
+        if (titleEl) {
+          titleEl.textContent = newName;
+          titleEl.style.display = '';
+        }
+        document.title = `${newName} - PaperLeaf 本地学术工作台`;
+      }
+      const proj = allProjectsCache.find(p => p.id === projectId);
+      if (proj) proj.name = newName;
+      renderProjects(allProjectsCache);
+      showQuickToast(`✓ 项目已重命名: ${newName}`);
+    } else {
+      alert('重命名失败: ' + (data.error || '未知错误'));
+      if (currentProjectMeta) {
+        const titleEl = document.getElementById('current-project-title');
+        if (titleEl) titleEl.style.display = '';
+      }
+    }
+  } catch (err) {
+    alert('重命名异常: ' + err);
+  }
+}
+
+function initProjectContextMenu() {
+  const ctxCopyName = document.getElementById('ctx-copy-name');
+  if (ctxCopyName) {
+    ctxCopyName.addEventListener('click', () => {
+      if (activeContextProject && activeContextProject.name) {
+        const textToCopy = activeContextProject.name;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(textToCopy).then(() => {
+            showQuickToast(`✓ 已复制项目名称: ${textToCopy}`);
+          }).catch(() => fallbackCopy(textToCopy));
+        } else {
+          fallbackCopy(textToCopy);
+        }
+      }
+      hideAllCustomContextMenus();
+    });
+  }
+
+  const ctxRenameProject = document.getElementById('ctx-rename-project');
+  if (ctxRenameProject) {
+    ctxRenameProject.addEventListener('click', async () => {
+      if (activeContextProject) {
+        const p = activeContextProject;
+        hideAllCustomContextMenus();
+        const newName = prompt('重命名项目：', p.name);
+        if (newName && newName.trim() && newName.trim() !== p.name) {
+          await renameProjectInternal(p.id, newName.trim());
+        }
+      }
+    });
+  }
+
+  function fallbackCopy(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand('copy');
+      showQuickToast(`✓ 已复制项目名称: ${text}`);
+    } catch (e) {
+      showQuickToast('复制失败，请手动选择复制');
+    }
+    document.body.removeChild(ta);
+  }
+
+  const ctxOpenProject = document.getElementById('ctx-open-project');
+  if (ctxOpenProject) {
+    ctxOpenProject.addEventListener('click', async () => {
+      if (activeContextProject) {
+        const p = activeContextProject;
+        hideAllCustomContextMenus();
+        await selectProject(p.id, p);
+      }
+    });
+  }
+
+  const ctxExportZip = document.getElementById('ctx-export-zip');
+  if (ctxExportZip) {
+    ctxExportZip.addEventListener('click', () => {
+      if (activeContextProject) {
+        const p = activeContextProject;
+        hideAllCustomContextMenus();
+        window.location.href = `/api/projects/${p.id}/export_zip`;
+      }
+    });
+  }
+}
+
+// 2. Project Title Left-Click Inline Rename
+function initProjectTitleInlineRename() {
+  const titleEl = document.getElementById('current-project-title');
+  if (!titleEl) return;
+  titleEl.title = '点击重命名当前项目';
+
+  titleEl.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!currentProjectId) return;
+    const currentName = (currentProjectMeta && currentProjectMeta.name) ? currentProjectMeta.name : titleEl.textContent.trim();
+    if (titleEl.style.display === 'none') return;
+    
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'project-title-input';
+    input.value = currentName;
+    input.spellcheck = false;
+
+    let isFinished = false;
+    const finishRename = async (save) => {
+      if (isFinished) return;
+      isFinished = true;
+      const newName = input.value.trim();
+      if (input.parentNode) input.parentNode.removeChild(input);
+      titleEl.style.display = '';
+      if (save && newName && newName !== currentName) {
+        await renameProjectInternal(currentProjectId, newName);
+      }
+    };
+
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        finishRename(true);
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        finishRename(false);
+      }
+    });
+
+    input.addEventListener('blur', () => {
+      finishRename(true);
+    });
+
+    titleEl.style.display = 'none';
+    titleEl.parentNode.insertBefore(input, titleEl.nextSibling);
+    input.focus();
+    input.select();
+  });
+}
+
+// 3. File Tree Custom Context Menu
+function showFileTreeContextMenu(e, fileItem) {
+  hideAllCustomContextMenus();
+  activeContextFile = fileItem;
+  const menu = document.getElementById('filetree-context-menu');
+  if (!menu) return;
+
+  const isDir = Boolean(fileItem.is_dir);
+  const isTex = !isDir && fileItem.path.toLowerCase().endsWith('.tex');
+
+  const btnRename = document.getElementById('ctx-tree-rename');
+  const btnDownload = document.getElementById('ctx-tree-download');
+  const btnDownloadZip = document.getElementById('ctx-tree-download-zip');
+  const btnSetRoot = document.getElementById('ctx-tree-set-root');
+  const btnNewFile = document.getElementById('ctx-tree-new-file');
+  const btnUpload = document.getElementById('ctx-tree-upload');
+  const btnCopyPath = document.getElementById('ctx-tree-copy-path');
+  const btnDelete = document.getElementById('ctx-tree-delete');
+
+  if (btnRename) btnRename.style.display = 'flex';
+  if (btnCopyPath) btnCopyPath.style.display = 'flex';
+  if (btnDelete) btnDelete.style.display = 'flex';
+
+  if (isDir) {
+    if (btnDownload) btnDownload.style.display = 'none';
+    if (btnSetRoot) btnSetRoot.style.display = 'none';
+    if (btnDownloadZip) btnDownloadZip.style.display = 'flex';
+    if (btnNewFile) btnNewFile.style.display = 'flex';
+    if (btnUpload) btnUpload.style.display = 'flex';
+  } else {
+    if (btnDownload) btnDownload.style.display = 'flex';
+    if (btnSetRoot) btnSetRoot.style.display = isTex ? 'flex' : 'none';
+    if (btnDownloadZip) btnDownloadZip.style.display = 'none';
+    if (btnNewFile) btnNewFile.style.display = 'none';
+    if (btnUpload) btnUpload.style.display = 'none';
+  }
+
+  menu.classList.remove('hidden');
+  positionContextMenu(menu, e.clientX, e.clientY, 200, isDir ? 230 : 200);
+}
+
+function initFileTreeContextMenu() {
+  const btnRename = document.getElementById('ctx-tree-rename');
+  if (btnRename) {
+    btnRename.addEventListener('click', async () => {
+      if (!activeContextFile || !currentProjectId) return;
+      const f = activeContextFile;
+      hideAllCustomContextMenus();
+      const newName = prompt(`重命名【${f.name}】：`, f.name);
+      if (!newName || !newName.trim() || newName.trim() === f.name) return;
+      try {
+        const res = await fetch(`/api/projects/${currentProjectId}/rename_file`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ old_path: f.path, new_name: newName.trim() })
+        });
+        const data = await res.json();
+        if (data.success) {
+          if (currentActiveFile === f.path) {
+            currentActiveFile = data.new_path;
+            const fileNameHeader = document.querySelector('.pane-header .file-name');
+            if (fileNameHeader) fileNameHeader.textContent = `📄 ${data.new_path}`;
+          }
+          openEditorTabs = openEditorTabs.map(p => p === f.path ? data.new_path : p);
+          renderEditorTabs();
+          await loadFileTree();
+          showQuickToast(`✓ 已重命名为: ${newName.trim()}`);
+        } else {
+          alert('重命名失败: ' + (data.error || '未知错误'));
+        }
+      } catch (err) {
+        alert('重命名异常: ' + err);
+      }
+    });
+  }
+
+  const btnDownload = document.getElementById('ctx-tree-download');
+  if (btnDownload) {
+    btnDownload.addEventListener('click', () => {
+      if (activeContextFile && !activeContextFile.is_dir) {
+        const p = activeContextFile.path;
+        hideAllCustomContextMenus();
+        downloadProjectFile(p);
+      }
+    });
+  }
+
+  const btnDownloadZip = document.getElementById('ctx-tree-download-zip');
+  if (btnDownloadZip) {
+    btnDownloadZip.addEventListener('click', () => {
+      if (activeContextFile && activeContextFile.is_dir) {
+        const p = activeContextFile.path;
+        hideAllCustomContextMenus();
+        downloadProjectFolder(p);
+      }
+    });
+  }
+
+  const btnSetRoot = document.getElementById('ctx-tree-set-root');
+  if (btnSetRoot) {
+    btnSetRoot.addEventListener('click', async () => {
+      if (!activeContextFile || !currentProjectId) return;
+      const targetRel = activeContextFile.path;
+      hideAllCustomContextMenus();
+      try {
+        const res = await fetch(`/api/projects/${currentProjectId}/set_root_document`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ root_document: targetRel })
+        });
+        const data = await res.json();
+        if (data.success) {
+          if (currentProjectMeta) currentProjectMeta.root_document = targetRel;
+          const cachedProj = allProjectsCache.find(p => p.id === currentProjectId);
+          if (cachedProj) cachedProj.root_document = targetRel;
+          await loadFileTree();
+          triggerCompile(true);
+          showQuickToast(`✓ 已设为主编译文档: ${targetRel}`);
+        } else {
+          alert('设置主文档失败: ' + (data.error || '未知错误'));
+        }
+      } catch (err) {
+        alert('设置主文档异常: ' + err);
+      }
+    });
+  }
+
+  const btnNewFile = document.getElementById('ctx-tree-new-file');
+  if (btnNewFile) {
+    btnNewFile.addEventListener('click', async () => {
+      if (!activeContextFile || !activeContextFile.is_dir) return;
+      const folderPath = activeContextFile.path;
+      hideAllCustomContextMenus();
+      const fileName = prompt(`在文件夹【${folderPath}】中新建文件：`);
+      if (!fileName || !fileName.trim()) return;
+      const targetRel = `${folderPath}/${fileName.trim()}`;
+      try {
+        const res = await fetch(`/api/projects/${currentProjectId}/create_file`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: targetRel })
+        });
+        const data = await res.json();
+        if (data.success) {
+          if (collapsedFolders.has(folderPath)) {
+            collapsedFolders.delete(folderPath);
+            saveCollapsedFolders();
+          }
+          await loadFileTree();
+          await switchActiveFile(targetRel);
+        } else {
+          alert('新建文件失败: ' + (data.error || '未知错误'));
+        }
+      } catch (err) {
+        alert('新建文件异常: ' + err);
+      }
+    });
+  }
+
+  const btnUpload = document.getElementById('ctx-tree-upload');
+  if (btnUpload) {
+    btnUpload.addEventListener('click', () => {
+      if (!activeContextFile || !activeContextFile.is_dir) return;
+      const folderPath = activeContextFile.path;
+      hideAllCustomContextMenus();
+      if (collapsedFolders.has(folderPath)) {
+        collapsedFolders.delete(folderPath);
+        saveCollapsedFolders();
+        updateFileTreeVisibility();
+      }
+      currentUploadTargetDir = folderPath;
+      const inputUpload = document.getElementById('input-tree-upload');
+      if (inputUpload) {
+        inputUpload.value = '';
+        inputUpload.click();
+      }
+    });
+  }
+
+  const btnCopyPath = document.getElementById('ctx-tree-copy-path');
+  if (btnCopyPath) {
+    btnCopyPath.addEventListener('click', () => {
+      if (activeContextFile) {
+        const p = activeContextFile.path;
+        hideAllCustomContextMenus();
+        navigator.clipboard.writeText(p).then(() => {
+          showQuickToast(`✓ 已复制相对路径: ${p}`);
+        }).catch(() => {
+          showQuickToast(`✓ 路径: ${p}`);
+        });
+      }
+    });
+  }
+
+  const btnDelete = document.getElementById('ctx-tree-delete');
+  if (btnDelete) {
+    btnDelete.addEventListener('click', async () => {
+      if (!activeContextFile) return;
+      const f = activeContextFile;
+      hideAllCustomContextMenus();
+      const typeLabel = f.is_dir ? '文件夹及其内部所有内容' : '文件';
+      if (confirm(`确定要彻底删除该${typeLabel}【${f.name}】吗？不可撤销！`)) {
+        await deleteProjectFile(f.path);
+      }
+    });
+  }
+}
+
+// 4. Code Editor Custom Context Menu
+function showEditorContextMenu(e) {
+  hideAllCustomContextMenus();
+  const menu = document.getElementById('editor-context-menu');
+  if (!menu || !editor) return;
+
+  const hasSelection = editor.somethingSelected();
+  const btnBold = document.getElementById('ctx-edit-bold');
+  const btnItalic = document.getElementById('ctx-edit-italic');
+  const btnMath = document.getElementById('ctx-edit-math');
+  const btnCut = document.getElementById('ctx-edit-cut');
+  const btnCopy = document.getElementById('ctx-edit-copy');
+  const btnPaste = document.getElementById('ctx-edit-paste');
+  const divFormat = document.getElementById('ctx-edit-div-format');
+  const btnCompile = document.getElementById('ctx-edit-compile');
+  const btnSearch = document.getElementById('ctx-edit-search');
+  const btnWordcount = document.getElementById('ctx-edit-wordcount');
+
+  if (hasSelection) {
+    if (btnBold) btnBold.style.display = 'flex';
+    if (btnItalic) btnItalic.style.display = 'flex';
+    if (btnMath) btnMath.style.display = 'flex';
+    if (btnCut) btnCut.style.display = 'flex';
+    if (btnCopy) btnCopy.style.display = 'flex';
+    if (divFormat) divFormat.style.display = 'block';
+    if (btnPaste) btnPaste.style.display = 'none';
+    if (btnCompile) btnCompile.style.display = 'none';
+    if (btnSearch) btnSearch.style.display = 'none';
+    if (btnWordcount) btnWordcount.style.display = 'none';
+  } else {
+    if (btnBold) btnBold.style.display = 'none';
+    if (btnItalic) btnItalic.style.display = 'none';
+    if (btnMath) btnMath.style.display = 'none';
+    if (btnCut) btnCut.style.display = 'none';
+    if (btnCopy) btnCopy.style.display = 'none';
+    if (divFormat) divFormat.style.display = 'none';
+    if (btnPaste) btnPaste.style.display = 'flex';
+    if (btnCompile) btnCompile.style.display = 'flex';
+    if (btnSearch) btnSearch.style.display = 'flex';
+    if (btnWordcount) btnWordcount.style.display = 'flex';
+  }
+
+  menu.classList.remove('hidden');
+  positionContextMenu(menu, e.clientX, e.clientY, 210, hasSelection ? 240 : 250);
+}
+
+function initEditorContextMenu() {
+  const btnSynctex = document.getElementById('ctx-edit-synctex');
+  if (btnSynctex) {
+    btnSynctex.addEventListener('click', () => {
+      hideAllCustomContextMenus();
+      triggerSyncTeXForward();
+    });
+  }
+
+  const btnCopy = document.getElementById('ctx-edit-copy');
+  if (btnCopy) {
+    btnCopy.addEventListener('click', () => {
+      hideAllCustomContextMenus();
+      if (editor && editor.somethingSelected()) {
+        const text = editor.getSelection();
+        navigator.clipboard.writeText(text).then(() => {
+          showQuickToast('✓ 已复制选中文本');
+        }).catch(() => {});
+      }
+    });
+  }
+
+  const btnCut = document.getElementById('ctx-edit-cut');
+  if (btnCut) {
+    btnCut.addEventListener('click', () => {
+      hideAllCustomContextMenus();
+      if (editor && editor.somethingSelected()) {
+        const text = editor.getSelection();
+        navigator.clipboard.writeText(text).then(() => {
+          editor.replaceSelection('');
+          showQuickToast('✓ 已剪切选中文本');
+        }).catch(() => {});
+      }
+    });
+  }
+
+  const btnPaste = document.getElementById('ctx-edit-paste');
+  if (btnPaste) {
+    btnPaste.addEventListener('click', () => {
+      hideAllCustomContextMenus();
+      if (editor && navigator.clipboard && navigator.clipboard.readText) {
+        navigator.clipboard.readText().then(clipText => {
+          if (clipText) {
+            editor.replaceSelection(clipText);
+            showQuickToast('✓ 已粘贴内容');
+          }
+        }).catch(() => {
+          showQuickToast('请使用 Ctrl+V 快捷键粘贴');
+        });
+      }
+    });
+  }
+
+  const btnBold = document.getElementById('ctx-edit-bold');
+  if (btnBold) {
+    btnBold.addEventListener('click', () => {
+      hideAllCustomContextMenus();
+      if (editor) formatBold(editor);
+    });
+  }
+
+  const btnItalic = document.getElementById('ctx-edit-italic');
+  if (btnItalic) {
+    btnItalic.addEventListener('click', () => {
+      hideAllCustomContextMenus();
+      if (editor) formatItalic(editor);
+    });
+  }
+
+  const btnMath = document.getElementById('ctx-edit-math');
+  if (btnMath) {
+    btnMath.addEventListener('click', () => {
+      hideAllCustomContextMenus();
+      if (editor) formatInlineMath(editor);
+    });
+  }
+
+  const btnCompile = document.getElementById('ctx-edit-compile');
+  if (btnCompile) {
+    btnCompile.addEventListener('click', () => {
+      hideAllCustomContextMenus();
+      triggerCompile(true);
+    });
+  }
+
+  const btnResetSplit = document.getElementById('ctx-edit-reset-split');
+  if (btnResetSplit) {
+    btnResetSplit.addEventListener('click', () => {
+      hideAllCustomContextMenus();
+      splitRatio = 0.5;
+      localStorage.setItem('paperleaf_split_ratio', '0.5');
+      applySplitRatio();
+      showQuickToast('✓ 已重置代码与论文分界线居中 (50:50)');
+    });
+  }
+
+  const btnSearch = document.getElementById('ctx-edit-search');
+  if (btnSearch) {
+    btnSearch.addEventListener('click', () => {
+      hideAllCustomContextMenus();
+      openSearchBar(false);
+    });
+  }
+
+  const btnWordcount = document.getElementById('ctx-edit-wordcount');
+  if (btnWordcount) {
+    btnWordcount.addEventListener('click', () => {
+      hideAllCustomContextMenus();
+      openWordCountModal();
+    });
+  }
+}
+
+// Global dismiss for all context menus on click or Escape
+document.addEventListener('click', hideAllCustomContextMenus);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') hideAllCustomContextMenus();
+});
+document.addEventListener('contextmenu', (e) => {
+  if (!e.target.closest('.project-item') && !e.target.closest('.tree-item') && !e.target.closest('.CodeMirror')) {
+    hideAllCustomContextMenus();
+  }
+});
 
 let currentActiveFile = 'main.tex';
 
@@ -769,6 +1384,18 @@ function downloadProjectFile(relPath) {
   const a = document.createElement('a');
   a.href = url;
   a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+function downloadProjectFolder(folderRelPath) {
+  if (!currentProjectId || !folderRelPath) return;
+  const folderName = folderRelPath.split('/').pop() || 'folder';
+  const url = `/api/projects/${currentProjectId}/export_zip?folder=${encodeURIComponent(folderRelPath)}`;
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${folderName}.zip`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -892,6 +1519,12 @@ function renderFileTree(files) {
     item.dataset.path = f.path;
     item.dataset.isDir = isDir ? 'true' : 'false';
 
+    item.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showFileTreeContextMenu(e, f);
+    });
+
     // Visual depth indentation based on directory slashes
     const depth = Math.max(0, f.path.split('/').length - 1);
     item.style.paddingLeft = `${8 + depth * 14}px`;
@@ -922,6 +1555,7 @@ function renderFileTree(files) {
           <span class="tree-item-name">${escapeHtml(f.name)}</span>
         </div>
         <div class="tree-item-actions">
+          <button class="tree-btn btn-folder-download" title="打包下载此文件夹【${escapeHtml(f.name)}】为 ZIP">⬇</button>
           <button class="tree-btn btn-folder-upload" title="上传文件到【${escapeHtml(f.name)}】">⬆</button>
           <button class="tree-btn btn-folder-new-file" title="在【${escapeHtml(f.name)}】中新建文件">+</button>
           <button class="tree-btn btn-delete-file" title="删除文件夹及其全部内容">✕</button>
@@ -933,6 +1567,15 @@ function renderFileTree(files) {
         if (e.target.closest('.tree-btn')) return;
         toggleFolderCollapse(f.path);
       });
+
+      // Folder download action
+      const folderDlBtn = item.querySelector('.btn-folder-download');
+      if (folderDlBtn) {
+        folderDlBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          downloadProjectFolder(f.path);
+        });
+      }
 
       // Folder actions
       const uploadBtn = item.querySelector('.btn-folder-upload');
@@ -1026,6 +1669,10 @@ function renderFileTree(files) {
             if (data.success) {
               if (currentProjectMeta) {
                 currentProjectMeta.root_document = f.path;
+              }
+              const cachedProj = allProjectsCache.find(p => p.id === currentProjectId);
+              if (cachedProj) {
+                cachedProj.root_document = f.path;
               }
               await loadFileTree();
               triggerCompile(true);
@@ -1621,6 +2268,16 @@ async function switchActiveFile(relPath) {
       updateOutline();
       renderEditorTabs();
       setSaveStatus('saved');
+
+      // If switching to a standalone LaTeX document, check if its compiled PDF exists and show it
+      if (relPath.toLowerCase().endsWith('.tex') && (data.content.includes('\\documentclass') || data.content.includes('\\begin{document}'))) {
+        const testUrl = `/api/projects/${currentProjectId}/pdf?doc=${encodeURIComponent(relPath)}`;
+        fetch(testUrl, { method: 'HEAD' }).then(headRes => {
+          if (headRes.ok) {
+            showPdf(`${testUrl}&t=${Date.now()}`);
+          }
+        }).catch(() => {});
+      }
     }
   } catch (err) {
     console.error('Failed to switch file:', err);
@@ -1736,7 +2393,8 @@ async function selectProject(projectId, cachedMeta = null) {
       updateLangDropdownChecks(meta.language);
       
       if (meta.has_pdf) {
-        showPdf(`/api/projects/${projectId}/pdf?t=${Date.now()}`);
+        const initDoc = meta.last_compiled_doc || targetRoot;
+        showPdf(`/api/projects/${projectId}/pdf?doc=${encodeURIComponent(initDoc)}&t=${Date.now()}`);
       } else {
         showPdfPlaceholder();
       }
@@ -1842,6 +2500,9 @@ async function triggerCompile(isManual = false) {
   if (editor && currentActiveFile && isEditableFile(currentActiveFile) && !isSwitchingProject && !isSwitchingFile) {
     payload.content = editor.getValue();
     payload.path = currentActiveFile;
+  }
+  if (currentActiveFile) {
+    payload.compile_target = currentActiveFile;
   }
   try {
     const res = await fetch(`/api/projects/${currentProjectId}/compile`, {
@@ -4155,11 +4816,12 @@ async function triggerSyncTeXForward(targetLine = null) {
     }
   }
   const fileName = currentActiveFile || 'main.tex';
+  const docName = getCurrentPdfDocName();
 
   setCompileStatus('idle', '🎯 正在同步定位第 ' + lineNo + ' 行...');
 
   try {
-    const res = await fetch('/api/projects/' + currentProjectId + '/synctex/forward?file=' + encodeURIComponent(fileName) + '&line=' + lineNo);
+    const res = await fetch('/api/projects/' + currentProjectId + '/synctex/forward?file=' + encodeURIComponent(fileName) + '&line=' + lineNo + '&doc=' + encodeURIComponent(docName));
     const data = await res.json();
     if (data.success && data.page) {
       highlightPdfRegion(data.page, data.x, data.y, data.w, data.h);
@@ -4241,8 +4903,10 @@ async function triggerSyncTeXBackward(pageNo, ptX, ptY) {
     setViewMode('split');
   }
 
+  const docName = getCurrentPdfDocName();
+
   try {
-    const res = await fetch('/api/projects/' + currentProjectId + '/synctex/backward?page=' + pageNo + '&x=' + ptX.toFixed(1) + '&y=' + ptY.toFixed(1));
+    const res = await fetch('/api/projects/' + currentProjectId + '/synctex/backward?page=' + pageNo + '&x=' + ptX.toFixed(1) + '&y=' + ptY.toFixed(1) + '&doc=' + encodeURIComponent(docName));
     const data = await res.json();
     if (data.success && data.line) {
       // If target file is different from currentActiveFile, switch to it
@@ -4779,7 +5443,8 @@ function initPopoutViewer() {
         return;
       }
       const pName = (currentProjectMeta && currentProjectMeta.name) ? currentProjectMeta.name : 'PDF';
-      window.open(`/viewer?project_id=${encodeURIComponent(currentProjectId)}&project_name=${encodeURIComponent(pName)}`, '_blank', 'width=980,height=920,menubar=no,toolbar=no');
+      const curDoc = getCurrentPdfDocName();
+      window.open(`/viewer?project_id=${encodeURIComponent(currentProjectId)}&project_name=${encodeURIComponent(pName)}&doc=${encodeURIComponent(curDoc)}`, '_blank', 'width=980,height=920,menubar=no,toolbar=no');
       // When opening independent popout viewer, switch main window to pure code view
       setViewMode('code');
     });
@@ -5390,6 +6055,10 @@ window.addEventListener('DOMContentLoaded', () => {
   initExitModal();
   initZipFeatures();
   initFileTreeUI();
+  initProjectContextMenu();
+  initProjectTitleInlineRename();
+  initFileTreeContextMenu();
+  initEditorContextMenu();
   initPopoutViewer();
   initHistoryUI();
   startHeartbeat();
@@ -5509,7 +6178,8 @@ window.addEventListener('DOMContentLoaded', () => {
   // Refresh PDF
   document.getElementById('btn-refresh-pdf').addEventListener('click', () => {
     if (currentProjectId) {
-      showPdf(`/api/projects/${currentProjectId}/pdf?t=${Date.now()}`);
+      const curDoc = getCurrentPdfDocName();
+      showPdf(`/api/projects/${currentProjectId}/pdf?doc=${encodeURIComponent(curDoc)}&t=${Date.now()}`);
     }
   });
 

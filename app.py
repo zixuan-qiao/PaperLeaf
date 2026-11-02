@@ -6,6 +6,7 @@ import shutil
 import re
 import subprocess
 import threading
+import urllib.parse
 from flask import Flask, request, jsonify, send_file, send_from_directory
 from templates import TEMPLATES
 from eps_handler import preprocess_project_eps
@@ -489,6 +490,58 @@ def delete_project_file(project_id):
         
     return jsonify({"success": True})
 
+@app.route("/api/projects/<project_id>/rename_file", methods=["POST"])
+def rename_project_file(project_id):
+    p_dir = os.path.join(PROJECTS_DIR, project_id)
+    if not os.path.exists(p_dir):
+        return jsonify({"success": False, "error": "项目不存在"}), 404
+        
+    data = request.json or {}
+    old_rel = data.get("old_path", "").strip().lstrip("/\\")
+    new_name = data.get("new_name", "").strip().lstrip("/\\")
+    if not old_rel or not new_name:
+        return jsonify({"success": False, "error": "原路径与新名称不能为空"}), 400
+        
+    if re.search(r'[\\/*?:"<>|]', new_name):
+        return jsonify({"success": False, "error": "名称包含非法字符"}), 400
+        
+    if old_rel in (".history", "meta.json", "build") or old_rel.startswith(".history/") or old_rel.startswith("build/"):
+        return jsonify({"success": False, "error": "禁止重命名系统关键文件或目录"}), 400
+        
+    old_target = os.path.abspath(os.path.join(p_dir, old_rel))
+    if not is_safe_subpath(p_dir, old_target) or not os.path.exists(old_target):
+        return jsonify({"success": False, "error": "原文件或目录不存在"}), 404
+        
+    parent_dir = os.path.dirname(old_target)
+    new_target = os.path.abspath(os.path.join(parent_dir, new_name))
+    if not is_safe_subpath(p_dir, new_target):
+        return jsonify({"success": False, "error": "非法目标路径"}), 400
+        
+    if os.path.exists(new_target):
+        return jsonify({"success": False, "error": "目标名称已存在，请换一个名称"}), 400
+        
+    try:
+        os.rename(old_target, new_target)
+    except Exception as e:
+        return jsonify({"success": False, "error": f"重命名失败: {str(e)}"}), 500
+        
+    # If the renamed file was root_document, update meta.json
+    meta_file = os.path.join(p_dir, "meta.json")
+    new_rel = os.path.relpath(new_target, p_dir).replace("\\", "/")
+    if os.path.exists(meta_file):
+        try:
+            with open(meta_file, "r", encoding="utf-8") as mf:
+                meta = json.load(mf)
+            if meta.get("root_document") == old_rel:
+                meta["root_document"] = new_rel
+                meta["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                with open(meta_file, "w", encoding="utf-8") as mf:
+                    json.dump(meta, mf, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+            
+    return jsonify({"success": True, "old_path": old_rel, "new_path": new_rel})
+
 @app.route("/api/projects/<project_id>/open_folder", methods=["POST"])
 def open_project_folder(project_id):
     p_dir = os.path.join(PROJECTS_DIR, project_id)
@@ -706,6 +759,24 @@ def export_zip(project_id):
     if not os.path.exists(p_dir):
         return "Project not found", 404
         
+    folder = request.args.get("folder", "").strip().lstrip("/\\")
+    if folder:
+        target_dir = os.path.abspath(os.path.join(p_dir, folder))
+        if not is_safe_subpath(p_dir, target_dir) or not os.path.isdir(target_dir):
+            return "Folder not found", 404
+        import zipfile
+        import io
+        memory_zip = io.BytesIO()
+        with zipfile.ZipFile(memory_zip, 'w', zipfile.ZIP_DEFLATED) as zip_out:
+            for root, dirs, files in os.walk(target_dir):
+                for file in files:
+                    full_path = os.path.join(root, file)
+                    arcname = os.path.relpath(full_path, target_dir)
+                    zip_out.write(full_path, arcname)
+        memory_zip.seek(0)
+        safe_folder_name = re.sub(r'[\\/*?:"<>|]', '_', os.path.basename(target_dir)).strip() or "folder"
+        return send_file(memory_zip, mimetype="application/zip", as_attachment=True, download_name=f"{safe_folder_name}.zip")
+
     is_clean = request.args.get("clean") == "true"
     import zipfile
     import io
@@ -780,6 +851,29 @@ def delete_project(project_id):
         shutil.rmtree(p_dir, ignore_errors=True)
         return jsonify({"success": True, "message": f"项目 {project_id} 及其所有生成文件已彻底清理"})
     return jsonify({"success": False, "message": "项目不存在"}), 404
+
+@app.route("/api/projects/<project_id>/rename", methods=["POST"])
+def rename_project(project_id):
+    p_dir = os.path.join(PROJECTS_DIR, project_id)
+    meta_file = os.path.join(p_dir, "meta.json")
+    if not os.path.exists(meta_file):
+        return jsonify({"success": False, "error": "项目不存在"}), 404
+        
+    data = request.get_json(silent=True) or {}
+    new_name = data.get("name", "").strip()
+    if not new_name:
+        return jsonify({"success": False, "error": "项目名称不能为空"}), 400
+        
+    try:
+        with open(meta_file, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        meta["name"] = new_name
+        meta["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(meta_file, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        return jsonify({"success": True, "project": meta, "name": new_name})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route("/api/projects/<project_id>/set_language", methods=["POST"])
 def set_project_language(project_id):
@@ -907,8 +1001,27 @@ def compile_project(project_id):
             with open(save_target, "w", encoding="utf-8") as f:
                 f.write(content_to_save)
 
+    # Determine compile target: if active document is a standalone LaTeX document, compile it!
+    compile_doc = root_doc
+    target_param = (data.get("compile_target") or data.get("path") or "").strip().lstrip("/\\")
+    if target_param and target_param.lower().endswith(".tex"):
+        cand_abs = os.path.abspath(os.path.join(p_dir, target_param))
+        if is_safe_subpath(p_dir, cand_abs) and os.path.exists(cand_abs):
+            try:
+                with open(cand_abs, "r", encoding="utf-8", errors="ignore") as f:
+                    head_sample = f.read(15000)
+                if "\\documentclass" in head_sample or "\\begin{document}" in head_sample:
+                    compile_doc = target_param
+            except Exception:
+                pass
+
+    tex_path = os.path.join(p_dir, compile_doc)
     if not os.path.exists(tex_path):
-        return jsonify({"success": False, "error": f"主编译文档不存在: {root_doc}"}), 400
+        compile_doc = root_doc
+        tex_path = os.path.join(p_dir, compile_doc)
+
+    if not os.path.exists(tex_path):
+        return jsonify({"success": False, "error": f"主编译文档不存在: {compile_doc}"}), 400
 
     env = os.environ.copy()
     env["TECTONIC_CACHE_DIR"] = CACHE_DIR
@@ -937,7 +1050,7 @@ def compile_project(project_id):
             creationflags=creation_flags
         )
         elapsed = round(time.time() - start_time, 2)
-        doc_stem = os.path.splitext(os.path.basename(root_doc))[0]
+        doc_stem = os.path.splitext(os.path.basename(compile_doc))[0]
         pdf_path = os.path.join(build_dir, f"{doc_stem}.pdf")
         if not os.path.exists(pdf_path):
             candidates = [os.path.join(build_dir, f) for f in os.listdir(build_dir) if f.lower().endswith(".pdf")]
@@ -952,7 +1065,7 @@ def compile_project(project_id):
                     with open(meta_file, "r", encoding="utf-8") as mf:
                         meta = json.load(mf)
                     meta["has_pdf"] = True
-                    meta["root_document"] = root_doc
+                    meta["last_compiled_doc"] = compile_doc
                     meta["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
                     with open(meta_file, "w", encoding="utf-8") as mf:
                         json.dump(meta, mf, ensure_ascii=False, indent=2)
@@ -970,7 +1083,8 @@ def compile_project(project_id):
             return jsonify({
                 "success": True,
                 "duration": elapsed,
-                "pdf_url": f"/api/projects/{project_id}/pdf?t={int(time.time() * 1000)}",
+                "compiled_doc": compile_doc,
+                "pdf_url": f"/api/projects/{project_id}/pdf?doc={urllib.parse.quote(compile_doc)}&t={int(time.time() * 1000)}",
                 "log": res.stdout or "编译成功",
                 "diagnostics": diagnostics
             })
@@ -981,6 +1095,7 @@ def compile_project(project_id):
             return jsonify({
                 "success": False,
                 "duration": elapsed,
+                "compiled_doc": compile_doc,
                 "errors": errors,
                 "log": res.stderr or res.stdout,
                 "diagnostics": diagnostics
@@ -1012,7 +1127,8 @@ def synctex_forward(project_id):
         line_no = int(request.args.get("line", 1))
     except (ValueError, TypeError):
         line_no = 1
-    pos = find_pos_for_line(p_dir, file_name, line_no)
+    doc = request.args.get("doc", "").strip().lstrip("/\\")
+    pos = find_pos_for_line(p_dir, file_name, line_no, doc=doc or file_name)
     return jsonify({
         "success": True,
         "page": pos["page"],
@@ -1033,7 +1149,8 @@ def synctex_backward(project_id):
         y = float(request.args.get("y", 0.0))
     except (ValueError, TypeError):
         page, x, y = 1, 0.0, 0.0
-    match = find_line_for_pos(p_dir, page, x, y)
+    doc = request.args.get("doc", "").strip().lstrip("/\\")
+    match = find_line_for_pos(p_dir, page, x, y, doc=doc)
     return jsonify({
         "success": True,
         "file": match["file"],
@@ -1047,6 +1164,13 @@ def get_pdf(project_id):
     if not os.path.exists(build_dir):
         return "PDF not found", 404
         
+    doc = request.args.get("doc", "").strip().lstrip("/\\")
+    if doc:
+        doc_stem = os.path.splitext(os.path.basename(doc))[0]
+        pdf_path = os.path.join(build_dir, f"{doc_stem}.pdf")
+        if os.path.exists(pdf_path):
+            return send_file(pdf_path, mimetype="application/pdf", as_attachment=False)
+
     root_doc = get_project_root_document(project_id)
     doc_stem = os.path.splitext(os.path.basename(root_doc))[0]
     pdf_path = os.path.join(build_dir, f"{doc_stem}.pdf")
@@ -1638,6 +1762,14 @@ def launch_edge_app():
             "show_smart_actions_in_full_menu": False,
             "smart_action_block_list": []
         }
+        # Suppress Microsoft Edge Copilot rewrite, inline write assistance & hover pencil button
+        prefs["compose_inline_enabled"] = False
+        prefs["edge_compose"] = {"enabled": False}
+        prefs["edge_writing_assistance"] = {"enabled": False}
+        if "edge" not in prefs:
+            prefs["edge"] = {}
+        prefs["edge"]["compose_copilot_consent_accepted"] = False
+        prefs["edge"]["compose_inline_enabled"] = False
         with open(pref_file, "w", encoding="utf-8") as pf:
             json.dump(prefs, pf)
     except Exception as pe:
@@ -1661,7 +1793,7 @@ def launch_edge_app():
             "--disable-metrics-reporting",
             "--disk-cache-size=10485760",
             "--media-cache-size=10485760",
-            "--disable-features=msWebOOUI,msPdfOOUI,EdgeMiniMenu,msEdgeMiniMenu,Translate,EdgeEntityExtraction,EdgeVisualSearch,EdgeSmartScreen,EdgeCollections,EdgeShopping"
+            "--disable-features=msWebOOUI,msPdfOOUI,EdgeMiniMenu,msEdgeMiniMenu,Translate,EdgeEntityExtraction,EdgeVisualSearch,EdgeSmartScreen,EdgeCollections,EdgeShopping,ComposeInline,EdgeCompose,msEdgeWritingAssistance,EdgeWritingAssistance,msEdgeInlineRewrite,EdgeInlineRewrite"
         ]
         log_msg(f"[EDGE] Running cmd: {cmd}")
         subprocess.Popen(cmd, creationflags=flags)

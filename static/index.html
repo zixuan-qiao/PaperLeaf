@@ -10,8 +10,8 @@
   <link rel="apple-touch-icon" href="/static/icon-192.png">
   <link rel="manifest" href="/static/manifest.json">
   <meta name="theme-color" content="#1e293b">
-  <link rel="stylesheet" href="/static/style.css?v=5.4">
-  <!-- Local Zero-Dependency CodeMirror with LaTeX Autocomplete -->
+  <link rel="stylesheet" href="/static/style.css?v=5.7">
+  <!-- Local Zero-Dependency CodeMirror with LaTeX Autocomplete & Code Folding -->
   <link rel="stylesheet" href="/static/vendor/codemirror/codemirror.min.css">
   <link rel="stylesheet" href="/static/vendor/codemirror/eclipse.min.css">
   <link rel="stylesheet" href="/static/vendor/codemirror/show-hint.min.css">
@@ -21,13 +21,18 @@
   <script defer src="/static/vendor/codemirror/matchbrackets.min.js" charset="UTF-8"></script>
   <script defer src="/static/vendor/codemirror/show-hint.min.js" charset="UTF-8"></script>
   <script defer src="/static/vendor/codemirror/anyword-hint.min.js" charset="UTF-8"></script>
+  <!-- CodeMirror Code Folding Addons & LaTeX Helper -->
+  <script defer src="/static/vendor/codemirror/foldcode.js" charset="UTF-8"></script>
+  <script defer src="/static/vendor/codemirror/foldgutter.js" charset="UTF-8"></script>
+  <script defer src="/static/vendor/codemirror/brace-fold.js" charset="UTF-8"></script>
+  <script defer src="/static/vendor/codemirror/latex-fold.js" charset="UTF-8"></script>
   <!-- Local Zero-Dependency PDF.js Engine -->
   <script defer src="/static/vendor/pdfjs/pdf.min.js" charset="UTF-8"></script>
   <!-- Local Zero-Dependency KaTeX Formula Engine -->
   <link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
   <script defer src="/static/vendor/katex/katex.min.js" charset="UTF-8"></script>
 </head>
-<body>
+<body data-ms-editor="false" spellcheck="false" autocorrect="off" autocapitalize="off">
   <div id="app-container">
     <!-- Top Global Header -->
     <header id="top-bar">
@@ -294,7 +299,7 @@
         </div>
 
         <!-- Code Editor -->
-        <div id="editor-wrapper" class="editor-wrapper">
+        <div id="editor-wrapper" class="editor-wrapper" data-ms-editor="false">
           <!-- Floating Search & Replace Bar -->
           <div id="search-replace-bar" class="search-replace-bar hidden">
             <div class="search-row">
@@ -314,7 +319,7 @@
               <button id="btn-replace-all" class="btn btn-xs btn-primary" title="全部替换">全部替换</button>
             </div>
           </div>
-          <textarea id="code-editor"></textarea>
+          <textarea id="code-editor" data-ms-editor="false" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea>
         </div>
         <!-- Media Preview Pane (for viewing uploaded images / PDFs directly) -->
         <div id="media-preview-wrapper" class="media-preview-wrapper hidden">
@@ -1031,6 +1036,47 @@
     <div class="math-preview-arrow" id="math-preview-arrow"></div>
   </div>
 
-  <script defer src="/static/app.js?v=5.5" charset="UTF-8"></script>
+  <!-- Custom Project Context Menu -->
+  <div id="project-context-menu" class="custom-context-menu hidden">
+    <button class="context-menu-item" id="ctx-copy-name">📋 复制项目名称</button>
+    <button class="context-menu-item" id="ctx-rename-project">✏️ 重命名项目</button>
+    <button class="context-menu-item" id="ctx-open-project">📂 打开此项目</button>
+    <div class="context-menu-divider"></div>
+    <button class="context-menu-item" id="ctx-export-zip">📦 导出为 ZIP</button>
+  </div>
+
+  <!-- Custom File Tree Context Menu (Files and Folders) -->
+  <div id="filetree-context-menu" class="custom-context-menu hidden">
+    <button class="context-menu-item" id="ctx-tree-rename">✏️ 重命名</button>
+    <button class="context-menu-item" id="ctx-tree-download">⬇️ 下载此文件</button>
+    <button class="context-menu-item" id="ctx-tree-download-zip">📦 打包下载为 ZIP</button>
+    <button class="context-menu-item" id="ctx-tree-set-root">📌 设为主编译文档</button>
+    <button class="context-menu-item" id="ctx-tree-new-file">➕ 新建文件</button>
+    <button class="context-menu-item" id="ctx-tree-upload">⬆️ 上传文件到此</button>
+    <button class="context-menu-item" id="ctx-tree-copy-path">📋 复制相对路径</button>
+    <div class="context-menu-divider"></div>
+    <button class="context-menu-item danger" id="ctx-tree-delete">🗑️ 删除</button>
+  </div>
+
+  <!-- Custom Code Editor Context Menu -->
+  <div id="editor-context-menu" class="custom-context-menu hidden">
+    <button class="context-menu-item" id="ctx-edit-synctex">🎯 跳转定位到 PDF</button>
+    <button class="context-menu-item" id="ctx-edit-copy">📋 复制 (Ctrl+C)</button>
+    <button class="context-menu-item" id="ctx-edit-cut">✂️ 剪切 (Ctrl+X)</button>
+    <button class="context-menu-item" id="ctx-edit-paste">📋 粘贴 (Ctrl+V)</button>
+    <div class="context-menu-divider" id="ctx-edit-div-format"></div>
+    <button class="context-menu-item" id="ctx-edit-bold"><b>B</b> 加粗 (\textbf)</button>
+    <button class="context-menu-item" id="ctx-edit-italic"><i>I</i> 斜体 (\textit)</button>
+    <button class="context-menu-item" id="ctx-edit-math">$x$ 数学公式 ($...$)</button>
+    <button class="context-menu-item" id="ctx-edit-compile">⚡ 立即编译 (Ctrl+S)</button>
+    <div class="context-menu-divider"></div>
+    <button class="context-menu-item" id="ctx-edit-reset-split">↔️ 重置分栏居中 (50:50)</button>
+    <button class="context-menu-item" id="ctx-edit-search">🔍 查找与替换</button>
+    <button class="context-menu-item" id="ctx-edit-wordcount">📊 字数统计</button>
+  </div>
+
+  <div id="quick-toast" class="quick-toast"></div>
+
+  <script defer src="/static/app.js?v=5.8" charset="UTF-8"></script>
 </body>
 </html>
